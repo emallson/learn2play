@@ -10,3 +10,4 @@ venv
 
 # tangled files
 *.py
+/experimental/twitch/
