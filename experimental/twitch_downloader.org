@@ -48,14 +48,6 @@ class CollectStreams(luigi.Task):
      list of urls for the video content.
 
      #+begin_src python
-# class DictParameter(luigi.parameter.Parameter):
-#     def parse(self, input):
-#         if isinstance(input, dict):
-#             return input
-#         else:
-#             import ast
-#             return ast.literal_eval(input)
-
 class CollectStreamVideos(luigi.Task):
     game = luigi.parameter.Parameter()
     stream = luigi.parameter.IntParameter()
@@ -103,41 +95,47 @@ class CollectVideos(luigi.Task):
      Download the videos from the list of video urls collected.
 
      #+begin_src python
+class DownloadFile(luigi.Task):
+    url = luigi.parameter.Parameter()
+    dest = luigi.parameter.Parameter()
+
+    def output(self):
+        return luigi.LocalTarget(self.dest)
+
+    def run(self):
+        r = requests.get(self.url, stream=True)
+        with self.output().open('w') as out:
+            for chunk in r.iter_content(chunk_size=int(1e7)):
+                out.write(chunk)
+                out.flush()
+
+
 class DownloadStreamVideos(luigi.Task):
     game = luigi.parameter.Parameter()
-    stream = luigi.parameter.Parameter()
+    stream = luigi.parameter.IntParameter()
+    strict = luigi.parameter.BoolParameter(default=True)
 
     def requires(self):
         return CollectStreamVideos(self.game, self.stream)
 
-    def output(self):
+    def run(self):
         fname = 'twitch/{game}/{stream}/{video_id}/raws/{urlbase}'
         with self.input().open('r') as f:
             videos = pickle.load(f)
         for video in videos:
-            for url in video['files']:
-                yield luigi.LocalTarget(fname.format(game=self.game,
-                                                     stream=self.stream,
-                                                     video_id=video['video']['_id'],
-                                                     urlbase=os.path.basename(url)))
-
-    def run(self):
-        with self.input().open('r') as f:
-            videos = pickle.load(f)
-
-        urls = []
-        for video in videos:
-            urls += video['files']
-
-        for url, output in zip(urls, self.output()):
-            r = requests.get(url, stream=True)
-            with output.open('w') as f:
-                for chunk in r.iter_content(chunk_size=int(1e7)):
-                    f.write(chunk)
-                    f.flush()
+            if not self.strict \
+            or video['video']['game'] is not None and self.game in video['video']['game']:
+                for url in video['files']:
+                    yield DownloadFile(
+                        url=url,
+                        dest=fname.format(game=self.game,
+                                          stream=self.stream,
+                                          video_id=video['video']['_id'],
+                                          urlbase=os.path.basename(url)))
 
 class DownloadVideos(luigi.Task):
     game = luigi.parameter.Parameter()
+    strict = luigi.parameter.BoolParameter(default=True)
 
     def run(self):
         stream_out = yield CollectStreams(self.game)
@@ -246,6 +244,9 @@ def videos(stream, offset=0):
      We have to grab an access token before downloading a video. Presumably
      this keeps rate-limiting centralized and avoids the problem of only being
      able to download part of a VoD.
+
+     Note: I'm getting almost no =v= videos, only =c= really. If I start
+     getting =v='s, I should re-build =video_v= to use =m3u8=
 
      #+begin_src python
 VIDEO_FILE_V_AUTH_CALL = 'http://api.twitch.tv/api/vods/{id}/access_token'
