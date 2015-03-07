@@ -1,0 +1,290 @@
+* Project: Hearthstone Bot
+  :PROPERTIES:
+  :EXPORT_FILE_NAME: hearthstone_proposal
+  :EXPORT_OPTIONS: toc:nil num:nil
+  :EXPORT_LATEX_HEADER: \usepackage{fullpage}\usepackage[margin=1in]{geometry}
+  :END:
+
+  The objective is to create a bot that can play Blizzard's game
+  [[http://us.battle.net/hearthstone][/Hearthstone/]]. Hearthstone is an online collectible card game. There are
+  four parts to the project: annotation, play prediction, action, and deck
+  construction. Completion of each part feeds into the next, though any of
+  them could be valuable in it's own right.
+
+  Many would care about an effective bot for its own sake (the "cool factor"
+  is pretty high, especially given that Hearthstone is a popular modern
+  game). However, there are several potential positive applications of an
+  effective bot.
+
+  - Advanced Practice Matches
+
+     Currently, Hearthstone has some bots to practice against. However, their
+     most advanced ones are pretty trivial to win against. A better bot could
+     provide a more advanced option for testing new strategies against
+     strategies learned by watching real players.
+
+  - Outlier Detection
+
+    By looking at the learned transition function (Part 2), it may be
+    possible to better identify cards and card combinations which are more
+    powerful than desired (outliers). While the Hearthstone developers
+    already have access to information on how people are playing the game,
+    watching a bot play from contrived scenarios may give further insight
+    into /why/ players play the way they do.
+
+  - Outsider Statistics
+
+    Third-party sites are ever-popular for online games. Many games
+    (including Hearthstone) have third-parties interested in keeping and
+    displaying statistics about their game (card statistics, common decks,
+    win percentages, etc), but do not have direct access to this
+    information. A good classifier could provide this information by watching
+    streams and providing annotations to these third parties.
+
+** Why Hearthstone?
+
+   I was originally considering doing this for League of Legends, taking
+   advantage of LoLReplay data to obtain stream annotations. However, I
+   decided to pursue Hearthstone first for three main reasons.
+
+   1. LoL has much stricter reaction time requirements. Reacting in more than
+      about 3/10s of a second will often spell death. Thus, any bot for it
+      would need to play faster than that. While this is almost certainly
+      possible, it is a constraint that I do not want to deal with
+      immediately. Hearthstone is much more forgiving. Players may take up to
+      90 seconds to complete a turn, during which often only 3-4 actions are
+      taken.
+   2. Hearthstone is clearer than LoL. Each champion in LoL has many
+      different appearances, some of which can dramatically alter how their
+      spells look. This significantly complicates the annotation stage. While
+      overcoming this appearance variation should be possible (and really, it
+      may not end up a significant problem), debugging the performance of a
+      Hearthstone bot will be easier.
+   3. My overall goal is to move towards general tools for playing
+      games. Hearthstone is only a first step. I hope to put things together
+      in such a way that -- once I have confirmed that it works on
+      Hearthstone -- it could be applied to more complex games like
+      LoL. Tackling a more complex game first will needlessly complicate the
+      task of laying the groundwork.
+
+** Direct Prediction vs Compositional Learning
+
+   My initial plan is to tackle this by composing several simple ML
+   algorithms instead of trying to use a single algorithm (deep learning with
+   caffe or what-have-you). Composing the simple algorithms will provide
+   gradually increasing value -- so even a failure partway through will
+   provide something useful. On the other hand if directly predicting
+   actions from a video stream doesn't work, then nothing of value is
+   created.
+
+   I /would/ like to look at predicting directly from the video, but I'm not
+   confident in my ability to debug something that goes from video to actions
+   directly. This is why I'm leaning towards putting together simple things
+   first.
+
+** Part 1: Stream Annotation
+   #+BEGIN_LaTeX
+   \[A : [\text{Frame}] \to [(\text{Rank}, \text{Class}, \text{Card
+   Locations}, \text{Cards}, \text{Cur Mana}, \text{Max Mana},
+   \text{Cur Health}, \text{Cur Armor}) :: \text{State}]\]
+   #+END_LaTeX
+
+   The first part of the project would be building something that can label a
+   video stream. Many people livestream Hearthstone on Twitch.tv, and the
+   videos are available for viewing afterward. This could provide a
+   significant amount of input data for subsequent phases of the project, if
+   properly interpreted.
+
+   The proposed annotations are:
+
+   - Frame type
+
+     Because we'd be consuming raw stream video, it is important to try to
+     avoid junk. Frames should be labeled as 'Hearthstone' or 'Not
+     Hearthstone'. Further labeling of Hearthstone frames can be done ('In
+     Game', 'In Menu', 'In Deck Builder', etc).
+
+   - Player Class(es)
+
+     Each player may be a different (or the same) class. This has significant
+     impact on strategies, so it important to label.
+
+   - Player Rank(s)
+
+     The rank of each player will have a significant impact on how they
+     play. Strategies and decks at the rank 25 (lowest) level are
+     significantly different from those at rank 1.
+
+   - Mana & Health
+
+     These are resources that the player has to manage. Health begins at 30,
+     and the objective of the game is to reduce the opponent's health to 0
+     before they do so to you. Mana is the resource used to play
+     cards. Knowing the values of both is critical for decision-making.
+
+
+   - Card Locations
+
+   - Card Type
+
+     There are >535 different cards, and new cards will be added in the
+     future. It would be advantageous to have a system that could
+     automatically segment seen cards so that manually constructing the label
+     set could be avoided and new cards could be used automatically.
+
+     Some sort of clustering will almost certainly be used in this. However,
+     I do not know which method. kNN doesn't make much sense for this, given
+     that each kind of card will have fairly homogeneous visuals. I expect
+     that determining the exact method used will require experimentation.
+
+   Background subtraction could be used after doing frame type classification
+   to possibly simplify the process of collecting frame annotations. OpenCV
+   has several background subtraction algorithms available.
+
+   The output from this phase could be useful without the completion of
+   subsequent phases, if it were fast. It could be used to monitor the
+   Hearthstone streaming community and identify card combinations that are
+   too powerful (from a game balance / Blizzard perspective), identify
+   winning decks (from a player perspective), or just compute statistics on
+   the types of things played.
+
+** Part 2: Choosing Plays
+
+   #+BEGIN_LaTeX
+   \[P : \text{State} \to \text{State}\]
+   \begin{center}
+   \textit{or}
+   \end{center}
+   \[P_\text{player} : \text{State} \to \text{State}, P_\text{opponent} :
+   \text{State} \to \text{State}\]
+   #+END_LaTeX
+
+   The input from Part 1 would be fed into a learning method (dunno what alg
+   yet), which would learn to predict subsequent board states from a given
+   board state.
+
+   It is possible that two different machines would need to be trained: one
+   to predict the visible player's play, and another to predict the
+   opposition's play.
+
+   The final result would ideally be something that could construct a play
+   graph in a short enough time to be think 5-6 turns ahead.
+
+   There is a 1994 paper from Brown University, [[http://ftp.cs.duke.edu/courses/spring07/cps296.3/littman94markov.pdf][Markov games as a framework
+   for multi-agent reinforcement learning]], which considers the problem of
+   reinforcement learning with 2 adversarial agents. This matches nicely with
+   the way Hearthstone is set up.  There is a significant amount of research
+   on multi-agent reinforcement learning, so I believe that it to be a
+   plausible starting point.
+
+   Again, this phase could be useful without completing any further
+   steps. One can imagine having a 'coach' program that is capable of
+   advising what actions a player should take.
+
+** Part 3: Taking Actions
+
+   \[M : \text{State} -> [\text{Action}]\]
+
+   Once the actions are predicted, they need to actually be taken. The
+   simplest way to do this would be programming them in (eg to play X on Y,
+   click in bounding box of X, then bounding box of Y). It would be really
+   cool if a machine could learn the input patterns used to change states.
+
+   This doesn't have significant application in Hearthstone, but in more
+   complex games (like League of Legends) it may not be feasible to program
+   the input methods for transforming plays into actions.
+
+   Further, for games like World of Warcraft 'bot-like behavior' (moving in
+   only straight lines, etc) is something that players notice and report. If
+   input were learned from observing humans, then ideally the generated
+   behavior would not be so noticeably bot-like.
+
+** Part 4: Constructing Decks
+
+   \[D : (\text{Rank}, \text{Class}) -> [\text{Card}]\]
+
+   Playing matches is only one part of playing Hearthstone. The other part is
+   constructing decks of cards with which to play. Ideally, the products of
+   parts 1 & 2 could be used to devise decks (eg given that one is playing at
+   rank N, construct a deck that maximizes the probability of reaching a
+   winning state in the play graph).
+
+   This part is a stretch-goal. If the other phases are complete and
+   effective, then deck construction poses interesting problems. For example:
+   how to take the knowledge encoded in the learned transition function and
+   turn it into a list of 30 cards for a deck?
+
+** Evaluation
+*** Part 1
+
+    The evaluation of the 2-class classifier will be simple. A training and
+    test set will be constructed, classifier trained, and then accuracy
+    measured by visualizing it with an ROC curve.
+
+    The evaluation of the frame annotations will be done similarly. For
+    continuous values (Mana, Health, Level), the evaluation will be a plot of
+    absolute error vs number of images with error \leq the x value.
+
+    The evaluation of the Class classifier will be visualized with either a
+    Precision/Recall plot or ROC curve. There are 8 possible values for it,
+    so I am not sure which to use (or if to use something else entirely).
+
+    The card location detector will be evaluated by measuring pixel
+    accuracy. Either overlap of bounding boxes or distance from card center
+    will be used as the metric. The error will be visualized as for other
+    continuous values (abs error vs number of instances with error \leq the x value).
+
+    I am not sure how to evaluate the card classifier yet. My initial
+    thoughts are to take labeled cutouts from the card location detector
+    and/or online resources like HearthHead and feed them to the
+    classifier. Error will be measured by counting instances of cards with
+    distinct labels mapping to the same cluster.
+
+*** Part 2
+
+    I am not sure how to evaluate this part. My initial thoughts are to
+    evaluate simulated games and consider win percentage. In the event that
+    Part 3 is completed successfully (or bypassed by programming in actions),
+    evaluation will be done by measuring win percentage in real games.
+
+*** Part 3
+
+    Evaluation of this phase will be done by computing the probability that
+    an action completes successfully. An action is considered to have
+    completed successfully if (1) the action terminates and (2) the actual
+    state arrived at matches the expected state.
+
+** Related Work
+
+   I have not been able to find any work specifically related to the end-goal
+   I have (building a bot). The individual components, however, have
+   significant related work. I have noted related work in each section (if I
+   have found any).
+
+** Rough Plan
+
+   I have already begun downloading Twitch Hearthstone streams.  Next I will
+   begin labeling scene types from the videos. Manually labeling a few videos
+   should be sufficient to produce good results, since the game screens and
+   real-world views are significantly different. Using SVM with HOG and color
+   histogram should be plenty sufficient to reliably label these.
+
+   Once it is downloading and labeling scenes, I will begin trying to
+   annotate player class, rank, card locations and the cards
+   themselves. Since player class and rank have constant locations, simple
+   methods will likely suffice for labeling them. Card location will be more
+   complicated because of appearance variety and occlusion, but card shape is
+   fairly constant (either a portrait rectangle or oval on the board).
+
+   Annotating card *type* will be harder. As noted previously, I'd like to
+   use something that is capable of distinguishing cards on its own and
+   producing a label set without manual construction. If card location
+   annotation is accurate, then I will have low-noise input for such a method
+   (which should help with results).
+
+   I still need to do more reading to nail down card type annotation and the
+   model for learning state transitions. For state transitions, I could use
+   simple prediction (learn function $\delta: \text{State} \to \text{State}$
+   by observation) or using some reinforcement learning.
+
+   Beyond this point, more reading is necessary.
