@@ -1,0 +1,37 @@
+* Background Subtraction
+  :PROPERTIES:
+  :header-args: :tangle bgsub.py :comments both :noweb yes
+  :END:
+
+  OpenCV has several different background subtraction algorithms. They all have
+  the same API, which makes trying them out pretty straightforward.
+
+  #+begin_src python
+#!/usr/bin/env python2
+
+import numpy as np
+import cv2
+import sys
+
+cap = cv2.VideoCapture(sys.argv[1])
+
+fgbg = cv2.BackgroundSubtractorMOG()
+
+while True:
+    ret, frame = cap.read()
+
+    fgmask = fgbg.apply(frame)
+
+    cv2.imshow('frame', fgmask)
+
+    key = cv2.waitKey(30) & 0xff
+    if key == 27:
+        break
+
+cap.release()
+cv2.destroyAllWindows()
+  #+end_src
+
+  [[file:figs/mog_bgsub.png][BackgroundSubtractorMOG]] seems to work a bit better than [[file:figs/mog2_bgsub.png][MOG2]] (on
+  non-Hearthstone but still online-TCG data). MOG2 has growing regions which I
+  think are shadows? MOG doesn't have these.

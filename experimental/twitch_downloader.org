@@ -1,0 +1,292 @@
+#+PROPERTY: header-args :comments both :noweb yes
+* Twitch.TV Game Downloader
+** Objective
+
+   We want to download every VoD for a given game. We do not want to download a
+   given VoD multiple times. We want to download in a massively parallel
+   fashion.
+
+** Structure
+
+   [[http://luigi.readthedocs.org/][Luigi]] is used to help manage the dependencies of the download.  [[http://docs.python-requests.org/en/latest/][Requests]] is
+   used to perform the downloads.
+
+*** Luigi Tasks
+    :PROPERTIES:
+    :header-args: :tangle twitch_downloader.py :comments both :noweb yes
+    :END:
+**** Imports
+
+    #+begin_src python
+import twitch
+import luigi
+import cPickle as pickle
+import requests
+import os
+    #+end_src
+
+**** CollectStreams(game)
+     Download a list of streams for a game and store it. This list needs to
+     somehow be periodically updated.
+
+     #+begin_src python
+class CollectStreams(luigi.Task):
+    game = luigi.parameter.Parameter()
+
+    def output(self):
+        return luigi.LocalTarget('twitch/{game}/streams.pickle'
+                                 .format(game=self.game))
+
+    def run(self):
+        with self.output().open('w') as f:
+            pickle.dump(list(twitch.streams(self.game)),
+                        f, pickle.HIGHEST_PROTOCOL)
+     #+end_src
+
+**** CollectVideos(game, date)
+     Collect Video objects from the list of streams collected. Also grabs the
+     list of urls for the video content.
+
+     #+begin_src python
+# class DictParameter(luigi.parameter.Parameter):
+#     def parse(self, input):
+#         if isinstance(input, dict):
+#             return input
+#         else:
+#             import ast
+#             return ast.literal_eval(input)
+
+class CollectStreamVideos(luigi.Task):
+    game = luigi.parameter.Parameter()
+    stream = luigi.parameter.IntParameter()
+
+    def requires(self):
+        return CollectStreams(game=self.game)
+
+    def output(self):
+        fname = 'twitch/{game}/{stream}/videos.pickle'.format(game=self.game,
+                                                              stream=self.stream)
+        return luigi.LocalTarget(fname)
+
+    def run(self):
+        with self.input().open('r') as streamfile:
+            streams = pickle.load(streamfile)
+            stream = None
+            for _stream in streams:
+                if _stream['_id'] == self.stream:
+                    stream = _stream
+                    break
+
+            if stream is None:
+                raise Exception("Unable to find stream!")
+
+        with self.output().open('w') as vidfile:
+            pickle.dump([{'video': video,
+                          'files': list(twitch.video_files(video))}
+                         for video in twitch.videos(stream)],
+                        vidfile, pickle.HIGHEST_PROTOCOL)
+
+
+class CollectVideos(luigi.Task):
+    game = luigi.parameter.Parameter()
+
+    def run(self):
+        stream_out = yield CollectStreams(self.game)
+        with stream_out.open('r') as f:
+            streams = pickle.load(f)
+
+            yield [CollectStreamVideos(game=self.game, stream=stream['_id'])
+                   for stream in streams]
+     #+end_src
+
+**** DownloadVideos(game, date)
+     Download the videos from the list of video urls collected.
+
+     #+begin_src python
+class DownloadStreamVideos(luigi.Task):
+    game = luigi.parameter.Parameter()
+    stream = luigi.parameter.Parameter()
+
+    def requires(self):
+        return CollectStreamVideos(self.game, self.stream)
+
+    def output(self):
+        fname = 'twitch/{game}/{stream}/{video_id}/raws/{urlbase}'
+        with self.input().open('r') as f:
+            videos = pickle.load(f)
+        for video in videos:
+            for url in video['files']:
+                yield luigi.LocalTarget(fname.format(game=self.game,
+                                                     stream=self.stream,
+                                                     video_id=video['video']['_id'],
+                                                     urlbase=os.path.basename(url)))
+
+    def run(self):
+        with self.input().open('r') as f:
+            videos = pickle.load(f)
+
+        urls = []
+        for video in videos:
+            urls += video['files']
+
+        for url, output in zip(urls, self.output()):
+            r = requests.get(url, stream=True)
+            with output.open('w') as f:
+                for chunk in r.iter_content(chunk_size=int(1e7)):
+                    f.write(chunk)
+                    f.flush()
+
+class DownloadVideos(luigi.Task):
+    game = luigi.parameter.Parameter()
+
+    def run(self):
+        stream_out = yield CollectStreams(self.game)
+
+        with stream_out.open('r') as f:
+            streams = pickle.load(f)
+
+            yield [DownloadStreamVideos(game=self.game, stream=stream['_id'])
+                   for stream in streams]
+     #+end_src
+
+**** Running
+     #+begin_src python
+if __name__ == '__main__':
+    luigi.run()
+     #+end_src
+*** Twitch.TV API Calls
+    :PROPERTIES:
+    :header-args: :tangle twitch.py :comments both :noweb yes
+    :END:
+
+    The Twitch API in general is [[https://github.com/justintv/Twitch-API][really, really nice]]. Once one endpoint is
+    known, the much of the related information can be traversed without
+    hardcoding any URLs.
+
+    #+begin_src python
+import requests
+from functools import partial
+
+TWITCH_API_BASE = 'https://api.twitch.tv/kraken'
+TWITCH_CLIENT_ID = 'cynkgg0aop8vcry4oua7btdvu6qkjjv'  # used to avoid rate limits
+PER_PAGE = 100
+
+GET = partial(requests.get, headers={'accept': 'application/vnd.twitchtv.3+json',
+                                     'client-id': TWITCH_CLIENT_ID})
+    #+end_src
+
+
+**** Streams for a Game
+     :PROPERTIES:
+     :api call: GET /search/streams?q=game&offset=n&limit=100
+     :END:
+
+     #+begin_src python
+API_CALL_STREAMS = TWITCH_API_BASE + '/search/streams'
+
+
+def streams(game, offset=0):
+    try:
+        req = GET(API_CALL_STREAMS,
+                  params={'q': game,
+                          'offset': offset,
+                          'limit': PER_PAGE})
+    except Exception as e:
+        print(e)
+        return
+
+    while True:
+        json = req.json()
+        streams = json['streams']
+
+        if len(streams) is 0:
+            break
+
+        for stream in streams:
+            yield stream
+        req = GET(json['_links']['next'])
+
+     #+end_src
+
+
+**** Videos for a Stream
+
+     The videos from a stream are obtained by GETting the
+     =stream._links.videos= URL.
+
+     #+begin_src python
+def videos(stream, offset=0):
+    try:
+        req = GET(stream['channel']['_links']['videos'],
+                  params={'limit': PER_PAGE,
+                          'offset': offset})
+
+    except Exception as e:
+        print(e)
+        return
+
+    while True:
+        json = req.json()
+        if len(json['videos']) is 0:
+            break
+
+        for video in json['videos']:
+            yield video
+
+        req = GET(json['_links']['next'])
+     #+end_src
+
+
+**** Files for a Video
+     :PROPERTIES:
+     :api call: GET http://usher.twitch.tv/vod/id?nauth=token&nauthsig=sig
+     :auth call: http://api.twitch.tv/api/vods/id/access_token
+     :END:
+
+     We have to grab an access token before downloading a video. Presumably
+     this keeps rate-limiting centralized and avoids the problem of only being
+     able to download part of a VoD.
+
+     #+begin_src python
+VIDEO_FILE_V_AUTH_CALL = 'http://api.twitch.tv/api/vods/{id}/access_token'
+VIDEO_FILE_V_API_CALL = 'http://usher.twitch.tv/vod/{id}'
+VIDEO_FILE_AC_API_CALL = 'http://api.twitch.tv/api/videos/{id}'
+
+def video_files(video):
+    def videos_ac():
+        req = GET(VIDEO_FILE_AC_API_CALL.format(id=_id))
+        try:
+            json = req.json()
+            if 'live' in json['chunks']:
+                return [chunk['url'] for chunk in
+                        json['chunks']['live']]
+            else:
+                return []
+        except:
+            return []
+
+    def videos_v():
+        auth_url = VIDEO_FILE_V_AUTH_CALL.format(id=_id[1:])
+        api_url = VIDEO_FILE_V_API_CALL.format(id=_id[1:])
+
+        access_token = GET(auth_url).json()
+        if 'token' not in access_token:
+            raise Exception("Could not find VOD {id}".format(id=_id))
+
+        res = GET(api_url, params={'nauth': access_token['token'],
+                                    'nauthsig': access_token['sig']})
+
+        return [line for line in res.text
+                if line.startswith('http')]
+
+    _id = video['_id']
+
+    if _id[0] == 'v':
+        videos = videos_v()
+    else:
+        videos = videos_ac()
+
+
+    for file_url in videos:  # TODO: figure out actual JSON object
+        yield file_url
+     #+end_src

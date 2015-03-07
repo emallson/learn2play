@@ -1,0 +1,12 @@
+# general
+TAGS
+venv
+
+# data files
+*.flv
+
+# bytecode
+*.pyc
+
+# tangled files
+*.py
