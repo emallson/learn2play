@@ -136,39 +136,44 @@ def cap_open(path):
 
 ***** Extracting Features
 
-      I am using SURF features. Because why not.
+****** Base Class
 
-      #+name: task:features
-      #+begin_src python
-def features(surf, frame):
-    kp, desc = surf.detectAndCompute(frame, None)
-    return desc
+       I want to be able to easily add new features. Building a base Luigi task
+       for computing features makes sense. The contract for extending this class is
+       very simple:
 
-import scipy.misc
-def resize(frame, size=(256, 256)):
-    return scipy.misc.imresize(frame, size)
+       - =identifier(self) -> str=
+         Generates a string identifying the type of features being computed.
+       - =features(self, frame) -> np.array=
+         Generates a set of features for a frame.
 
+       #+name: task:features
+       #+begin_src python
 class Features(luigi.Task):
     video = luigi.Parameter()
     rate = luigi.IntParameter(default=10)  # 1 in $rate frames are used
-    upright = luigi.BooleanParameter(default=True)
-    hessianThreshold = luigi.IntParameter(default=5000)
+    color = luigi.BooleanParameter(default=True)
 
-    def output(self):
-        path = self.video + '_surf_{rate}_{upright}{hessian}.npz'.format(
-            upright='upright_' if self.upright else '',
-            hessian=self.hessianThreshold,
+    def identifier(self):
+        raise ValueError("Do not use the base class!")
+
+    def output(self, type=None):
+        path = self.video + '_{type}_{gray}{rate}.npz'.format(
             rate=self.rate,
+            type=self.identifier(),
+            gray=('gray_' if not self.color else '')
         )
         return luigi.LocalTarget(path)
+
+    def features(self):
+        raise ValueError("Do not use the base class!")
 
     def run(self):
         <<frame-gen>>
 
         cap = cv2.VideoCapture(self.video)
-        surf = cv2.SURF(self.hessianThreshold, upright=self.upright)
 
-        video_features = {str(index): features(surf, frame)
+        video_features = {str(index): self.features(frame)
                           for index, frame in enumerate(frames(cap))
                           if index % self.rate == 0}
         # some frames produce None for their descriptor, don't know why
@@ -177,7 +182,137 @@ class Features(luigi.Task):
 
         with self.output().open('w') as out:
             np.savez_compressed(out, **video_features)
+       #+end_src
+
+****** Specifying a Feature Type
+
+       To specify the kind of features for a task in a variable fashion, simply
+       add a =FeatureParameter()=, which will return a sub-class of =Features=
+       or throw an error.
+
+       #+name: param:features
+       #+begin_src python
+class FeatureParameter(luigi.Parameter):
+    def parse(self, x):
+        if type(x) == str:
+            cls = globals()[x]
+        else:
+            cls = x
+
+        if issubclass(cls, Features) and not cls == Features:
+            return cls
+        else:
+            raise ValueError('Unknown features requested.')
+
       #+end_src
+
+****** SURF Features
+       SURF feature implementation using =cv2.SURF=.
+
+       #+name: features:surf
+       #+begin_src python
+class SURFFeatures(Features):
+    hessianThreshold = luigi.IntParameter(default=5000)
+    upright = luigi.BooleanParameter(default=True)
+
+    def identifier(self):
+        return 'surf_{upright}{hessian}'.format(
+            upright='upright_' if self.upright else '',
+            hessian=self.hessianThreshold
+        )
+
+    def surf(self):
+        return cv2.SURF(upright=self.upright,
+                        hessianThreshold=self.hessianThreshold)
+
+    def features(self, frame):
+        kp, desc = self.surf().detectAndCompute(frame, None)
+        return desc
+       #+end_src
+
+****** SURF Histograms
+
+       SURF BoVW histograms. Has a forward dependency on the =Vocabulary= task.
+
+       #+name: features:surf_histogram
+       #+begin_src python
+class SURFHistograms(SURFFeatures):
+
+    def requires(self):
+        return {
+            'vocab': Vocabulary(
+                rate=self.rate,
+                features=SURFFeatures
+            ),
+            'surf': SURFFeatures(
+                rate=self.rate,
+                video=self.video
+            )
+        }
+
+    def identifier(self):
+        return 'surf_hist_{upright}{hessian}'.format(
+            upright='upright_' if self.upright else '',
+            hessian=self.hessianThreshold
+        )
+
+    def run(self):
+        centers = np.load(self.input()['vocab'].path)['centers']
+        features = np.load(self.input()['surf'].path)
+
+        def histogram(feat):
+            h = np.zeros((len(centers),), dtype='float32')
+            for f in feat:
+                dist = np.linalg.norm(centers - f, axis=1)
+                h[dist.argmax()] += 1
+            return h / np.linalg.norm(h)
+
+        with self.output().open('w') as f:
+            np.savez_compressed(
+                f,
+                ,**{k: histogram(v)
+                   for k, v in features.iteritems()})
+       #+end_src
+****** Tiny Images
+
+       Simple Tiny Images implementation: resize the image to be really
+       fragging small.
+
+       #+name: features:tiny
+       #+begin_src python
+class TinyFeatures(Features):
+    size = luigi.Parameter(default='16x16')
+
+    def identifier(self):
+        return 'tiny_{size}'.format(size=self.size)
+
+    def features(self, frame):
+        from scipy.misc import imresize
+
+        size = map(int, self.size.split('x'))
+        return imresize(frame, size).reshape(-1)
+      #+end_src
+****** All Features Combined
+
+       #+name: all_features
+       #+begin_src python
+<<task:features>>
+
+
+<<param:features>>
+
+
+<<task:vocabulary>>
+
+
+<<features:surf>>
+
+
+<<features:surf_histogram>>
+
+
+<<features:tiny>>
+       #+end_src
 
 ***** Building Vocabulary
 
@@ -192,9 +327,11 @@ class Vocabulary(luigi.Task):
     num_videos = luigi.IntParameter(default=10)
     rate = luigi.IntParameter(default=100)
     seed = luigi.IntParameter(default=None, significant=False)
+    features = FeatureParameter()
 
     def output(self):
-        path = 'training/{words}_{videos}.npz'.format(
+        path = 'training/{ident}_{words}_{videos}.npz'.format(
+            ident=self.features(video='', rate=self.rate).identifier(),
             words=self.num_words,
             videos=self.num_videos
         )
@@ -208,7 +345,9 @@ class Vocabulary(luigi.Task):
         shuffle(paths)
 
         all_features = []
-        feats = yield [Features(video=path,rate=self.rate) for path in paths[:self.num_videos]]
+        feats = yield [self.features(video=path,rate=self.rate)
+                       for path in paths[:self.num_videos]]
+
         for feat in feats:
             with feat.open('r') as f:
                 features = dict(np.load(f).items()).values()
@@ -236,9 +375,21 @@ class Vocabulary(luigi.Task):
       #+begin_src python
 class HearthstoneModel(luigi.Task):
     rate = luigi.IntParameter(default=100)
+    features = FeatureParameter()
+
+    def requires(self):
+        paths = glob('twitch/Hearthstone/*/*/raws/*.flv.partitions')
+        return {
+            'vocab': Vocabulary(features=self.features, rate=self.rate),
+            'features': [self.features(video=path.rstrip('.partitions'),
+                                       rate=self.rate)
+                         for path in paths]
+        }
 
     def output(self):
-        return luigi.LocalTarget('training/hearthstone_model.xml')
+        return luigi.LocalTarget('training/hearthstone_model_{ident}.xml'.format(
+            ident=self.features(video='', rate=self.rate).identifier()
+        ))
 
     def run(self):
         def response(partitions, frame_num):
@@ -249,23 +400,13 @@ class HearthstoneModel(luigi.Task):
                 hearthstone = not hearthstone
             return (1 if hearthstone else -1)
 
-        def histogram(centers, feat):
-            h = np.zeros((len(centers),), dtype='float32')
-            for f in feat:
-                dist = np.linalg.norm(centers - f, axis=1)
-                h[dist.argmax()] += 1
-            return h / np.linalg.norm(h)
-
-        from glob import glob
         paths = glob('twitch/Hearthstone/*/*/raws/*.flv.partitions')
 
-        vocab_out = yield Vocabulary(rate=self.rate)
-        with vocab_out.open('r') as f:
+        with self.input()['vocab'].open('r') as f:
             npz = np.load(f)
             centers = npz['centers']
 
-        features = yield [Features(video=path.rstrip('.partitions'), rate=self.rate)
-                          for path in paths]
+        features = self.input()['features']
 
         svm = cv2.SVM()
         trainData = []
@@ -282,15 +423,15 @@ class HearthstoneModel(luigi.Task):
                 features = np.load(f).items()
                 for frame_num, feat in features:
                     frame_num = int(frame_num)
-                    trainDatum = histogram(centers, feat)
                     resp = response(partitions, frame_num)
-                    trainData.append(trainDatum)
+                    trainData.append(feat)
                     responses.append(resp)
 
         trainData = np.vstack(trainData)
         responses = np.vstack(responses)
-        np.savez_compressed('svm_data.npz', trainData=trainData, responses=responses)
-        print(responses.shape)
+        np.savez_compressed('svm_data.npz',
+                            trainData=trainData,
+                            responses=responses)
         svm.train_auto(
             trainData, responses,
             None, None,  # everything is interesting
@@ -302,63 +443,16 @@ class HearthstoneModel(luigi.Task):
       #+end_src
 ***** Putting it Together
 
-      :HIDDEN:
-      #+begin_src python
-import cv2
-import numpy as np
-
-
-<<features-frame>>
-
-
-<<frame-gen>>
-
-
-<<cap-open>>
-
-
-<<model-input-gen>>
-
-
-<<train-fn>>
-
-
-def main(dest, paths):
-    svm = cv2.SVM()
-    for path in paths:
-        svm = train(svm, path)
-    svm.save(dest)
-
-
-if __name__ == '__main__':
-    import argparse
-    import sys
-    parser = argparse.ArgumentParser()
-    parser.add_argument('dest')
-    parser.add_argument('paths', nargs=argparse.REMAINDER)
-
-    args = parser.parse_args()
-
-    if len(args.paths) is 0:
-        paths = (p.strip() for p in sys.stdin)
-        main(args.dest, paths)
-    else:
-        main(args.dest, args.paths)
-      #+end_src
-      :END:
-
       #+begin_src python :tangle learn2play.py :comments both :noweb yes
 import luigi
 import cPickle as pickle
 import cv2
 import numpy as np
 import sys
+from glob import glob, iglob
 
 
-<<task:features>>
-
-
-<<task:vocabulary>>
+<<all_features>>
 
 
 <<task:svm-hs?>>
