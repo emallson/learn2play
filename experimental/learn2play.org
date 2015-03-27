@@ -135,7 +135,6 @@ def cap_open(path):
       #+end_src
 
 ***** Extracting Features
-
 ****** Base Class
 
        I want to be able to easily add new features. Building a base Luigi task
@@ -187,23 +186,22 @@ class Features(luigi.Task):
 ****** Specifying a Feature Type
 
        To specify the kind of features for a task in a variable fashion, simply
-       add a =FeatureParameter()=, which will return a sub-class of =Features=
+       add a =TaskParameter()=, which will return a sub-class of =Features=
        or throw an error.
 
        #+name: param:features
        #+begin_src python
-class FeatureParameter(luigi.Parameter):
+class TaskParameter(luigi.Parameter):
     def parse(self, x):
         if type(x) == str:
             cls = globals()[x]
         else:
             cls = x
 
-        if issubclass(cls, Features) and not cls == Features:
+        if issubclass(cls, luigi.Task) and not cls == luigi.Task:
             return cls
         else:
-            raise ValueError('Unknown features requested.')
-
+            raise ValueError('Unknown task requested.')
       #+end_src
 
 ****** SURF Features
@@ -327,7 +325,7 @@ class Vocabulary(luigi.Task):
     num_videos = luigi.IntParameter(default=10)
     rate = luigi.IntParameter(default=100)
     seed = luigi.IntParameter(default=None, significant=False)
-    features = FeatureParameter()
+    features = TaskParameter()
 
     def output(self):
         path = 'training/{ident}_{words}_{videos}.npz'.format(
@@ -373,42 +371,24 @@ class Vocabulary(luigi.Task):
 
       #+name: task:svm-hs?
       #+begin_src python
-class HearthstoneModel(luigi.Task):
+
+class Dataset(luigi.Task):
     rate = luigi.IntParameter(default=100)
-    features = FeatureParameter()
+    features = TaskParameter()
 
-    def requires(self):
-        paths = glob('twitch/Hearthstone/*/*/raws/*.flv.partitions')
-        return {
-            'vocab': Vocabulary(features=self.features, rate=self.rate),
-            'features': [self.features(video=path.rstrip('.partitions'),
-                                       rate=self.rate)
-                         for path in paths]
-        }
+    def known_paths(self):
+        return glob('twitch/Hearthstone/*/*/raws/*.flv.partitions')
 
-    def output(self):
-        return luigi.LocalTarget('training/hearthstone_model_{ident}.xml'.format(
-            ident=self.features(video='', rate=self.rate).identifier()
-        ))
+    def response(self, partitions, frame_num):
+        hearthstone = False
+        for partition in partitions:
+            if frame_num < partition:
+                return (1 if hearthstone else -1)
+            hearthstone = not hearthstone
+        return (1 if hearthstone else -1)
 
-    def run(self):
-        def response(partitions, frame_num):
-            hearthstone = False
-            for partition in partitions:
-                if frame_num < partition:
-                    return (1 if hearthstone else -1)
-                hearthstone = not hearthstone
-            return (1 if hearthstone else -1)
 
-        paths = glob('twitch/Hearthstone/*/*/raws/*.flv.partitions')
-
-        with self.input()['vocab'].open('r') as f:
-            npz = np.load(f)
-            centers = npz['centers']
-
-        features = self.input()['features']
-
-        svm = cv2.SVM()
+    def load_train_test(self, paths, features):
         trainData = []
         responses = []
         for path, feat in zip(paths, features):
@@ -423,31 +403,166 @@ class HearthstoneModel(luigi.Task):
                 features = np.load(f).items()
                 for frame_num, feat in features:
                     frame_num = int(frame_num)
-                    resp = response(partitions, frame_num)
+                    resp = self.response(partitions, frame_num)
                     trainData.append(feat)
                     responses.append(resp)
 
         trainData = np.vstack(trainData)
         responses = np.vstack(responses)
-        np.savez_compressed('svm_data.npz',
-                            trainData=trainData,
-                            responses=responses)
-        svm.train_auto(
-            trainData, responses,
-            None, None,  # everything is interesting
-            {"svm_type": cv2.SVM_C_SVC,
-             "kernel_type": cv2.SVM_LINEAR,},
-            10,
+        return trainData, responses
+
+    def requires(self):
+        paths = self.known_paths()
+        return [self.features(video=path.rstrip('.partitions'),
+                              rate=self.rate)
+                for path in paths]
+
+    def output(self):
+        path = 'datasets/{id}_{rate}.npz'.format(
+            id=self.features(video='', rate=self.rate).identifier(),
+            rate=self.rate
         )
-        svm.save(self.output().path)
+        return luigi.LocalTarget(path)
+
+    def run(self):
+        train, resp = self.load_train_test(self.known_paths(), self.input())
+
+        with self.output().open('w') as f:
+            np.savez_compressed(f,
+                                trainData=train,
+                                responses=resp)
+
+class HearthstoneModel(luigi.Task):
+    rate = luigi.IntParameter(default=100)
+    features = TaskParameter()
+    rand_state = luigi.IntParameter(default=None)
+    test_size = luigi.FloatParameter(default=0.5)
+
+    def __init__(self, *args, **kwargs):
+        from random import randint
+        super(HearthstoneModel, self).__init__(*args, **kwargs)
+        if self.rand_state is None:
+            self.rand_state = random.randint(0, np.iinfo(np.uint32).max)
+
+    def requires(self):
+        return Dataset(rate=self.rate, features=self.features)
+
+    def output(self):
+        return luigi.LocalTarget('training/hearthstone_model_{ident}.jl'.format(
+            ident=self.features(video='', rate=self.rate).identifier()
+        ))
+
+    def run(self):
+        from sklearn import svm
+        from sklearn.cross_validation import train_test_split
+        from sklearn.externals import joblib
+        dataset = np.load(self.input().path)
+
+        f_train, _, r_train, _ = train_test_split(
+            dataset['trainData'], dataset['responses'],
+            test_size=self.test_size,
+            random_state=self.rand_state
+        )
+
+        clf = svm.LinearSVC()
+        clf.fit(
+            dataset['trainData'],
+            dataset['responses'],
+        )
+
+        joblib.dump(clf, self.output().path)
       #+end_src
+***** Evaluation
+      An ROC curve makes sense for evaluating the performance of this
+      method. The following task computes one, producing a PNG plot with the
+      AUC on it.
+
+      #+name: task:roc
+      #+begin_src python
+class ROCCurve(luigi.Task):
+    model = TaskParameter()
+    rate = luigi.IntParameter()
+    features = TaskParameter()
+    rand_state = luigi.IntParameter(default=None)
+    test_size = luigi.FloatParameter(default=0.5)
+
+    def __init__(self, *args, **kwargs):
+        from random import randint
+        super(ROCCurve, self).__init__(*args, **kwargs)
+        if self.rand_state is None:
+            self.rand_state = random.randint(0, np.iinfo(np.uint32).max)
+
+    def requires(self):
+        return {
+            'model': self.model(
+                rand_state=self.rand_state,
+                test_size=self.test_size,
+                features=self.features,
+                rate=self.rate
+            ),
+            'dataset': Dataset(rate=self.rate,
+                               features=self.features)
+        }
+
+    def output(self):
+        self.model_name = os.path.splitext(
+            os.path.basename(self.input()['model'].path))[0]
+
+        return luigi.LocalTarget('plots/roc_{rate}_{model_name}.png'.format(
+            model_name=self.model_name,
+            rate=self.rate
+        ))
+
+    def run(self):
+        from sklearn.cross_validation import train_test_split
+        from sklearn.externals import joblib
+        from sklearn.metrics import roc_curve, auc
+
+        dataset = np.load(self.input()['dataset'].path)
+
+        _, f_test, _, r_test = train_test_split(
+            dataset['trainData'], dataset['responses'],
+            test_size=self.test_size,
+            random_state=self.rand_state
+        )
+
+        classifier = joblib.load(self.input()['model'].path)
+
+        r_scores = classifier.predict(f_test)
+
+        fpr, tpr, _ = roc_curve(r_test, r_scores)
+        auc = auc(fpr, tpr)
+
+        plt.figure()
+        plt.plot(fpr, tpr)
+        plt.xlabel('False Positive Rate')
+        plt.xlim([0.0, 1.0])
+        plt.ylabel('True Positive Rate')
+        plt.ylim([0.0, 1.05])
+        plt.title("ROC for {model_name} (Test size: {ts}, AUC: {auc})".format(
+            model_name=self.model_name,
+            ts=self.test_size,
+            auc=auc
+        ))
+        try:
+            os.makedirs(os.path.dirname(self.output().path))
+        except:
+            pass
+
+        plt.savefig(self.output().path)
+      #+end_src
+
 ***** Putting it Together
 
       #+begin_src python :tangle learn2play.py :comments both :noweb yes
 import luigi
 import cPickle as pickle
 import cv2
+import sklearn
 import numpy as np
+import random
+from matplotlib import pyplot as plt
+import os
 import sys
 from glob import glob, iglob
 
@@ -457,10 +572,139 @@ from glob import glob, iglob
 
 <<task:svm-hs?>>
 
+<<task:roc>>
+
 if __name__ == "__main__":
-    luigi.run()
+    luigi.run(local_scheduler=True)
       #+end_src
 
+***** Results
+
+      Results are computed as the AUC of ROC curves with a 50/50 train/test
+      split. Only 6 videos were annotated.
+
+****** SURF Histogram Features
+       These features are computed with =hessianThreshold=5000=, a Bag of
+       Visual Words with =n=200= and a sampling rate of =1/1000=.
+
+       #+name: roc:svm+surf
+       #+begin_src python :results value file :exports results
+import luigi
+import sys
+from luigi.scheduler import CentralPlannerScheduler as CSP
+from luigi.worker import Worker
+from learn2play import ROCCurve, HearthstoneModel, SURFHistograms
+
+roc = ROCCurve(
+    rate=1000,
+    model=HearthstoneModel,
+    features=SURFHistograms
+)
+
+w = Worker(scheduler=CSP())
+w.add(roc)
+if w.run():
+    return roc.output().path
+       #+end_src
+
+       #+RESULTS: roc:svm+surf
+       [[file:plots/roc_1000_hearthstone_model_surf_hist_upright_5000.png]]
+
+       Not as good as I'd hoped, especially given how long it takes to compute
+       SURF Features over that many frames.
+
+       *AUC:* 0.846
+
+****** Tiny Images
+
+       Tiny Images seem like a good fit for Hearthstone games, given that
+       rotation and position within the image are pretty constant.
+
+       #+name: roc:svm+tiny
+       #+begin_src python :results value file :exports results
+import luigi
+import sys
+from luigi.scheduler import CentralPlannerScheduler as CSP
+from luigi.worker import Worker
+from learn2play import ROCCurve, HearthstoneModel, TinyFeatures
+
+roc = ROCCurve(
+    rate=100,
+    model=HearthstoneModel,
+    features=TinyFeatures
+)
+
+w = Worker(scheduler=CSP())
+w.add(roc)
+if w.run():
+    return roc.output().path
+       #+end_src
+
+       #+RESULTS: roc:svm+tiny
+       [[file:plots/roc_100_hearthstone_model_tiny_16x16.png]]
+
+       Turns out that that intuition was spot-on.
+
+       *AUC*: 1.0
+
+****** Secondary Evaluation
+
+       Since the Tiny Images feature set performed so incredibly well (too
+       well, some might say), I decided to give it a secondary semi-manual
+       evaluation. Here is a small script which displays a video with an
+       overlay of whether it is =Hearthstone= or =Not Hearthstone=.
+       #+begin_src python :tangle part1_eval.py :noweb yes :exports none
+import cv2
+from learn2play import *
+from sys import argv
+from sklearn.externals import joblib
+
+<<frame-gen>>
+
+model_task = HearthstoneModel(rate=1000, features=TinyFeatures)
+classifier = joblib.load(model_task.output().path)
+
+tinyfy = TinyFeatures(video='', rate=1000).features
+
+cap = cv2.VideoCapture(argv[1])
+
+def textify(frame, text):
+    copy = frame.copy()
+    cv2.putText(copy, text, (10,100), cv2.FONT_HERSHEY_SIMPLEX, 2, 255)
+    return copy
+
+cv2.namedWindow('frame')
+for frame in frames(cap):
+    print frame.shape
+    tiny = tinyfy(frame)
+    prediction = classifier.predict([tiny])
+    print prediction
+    if prediction == 1:
+        cv2.imshow('frame', textify(frame, 'Hearthstone'))
+    else:
+        cv2.imshow('frame', textify(frame, 'Not Hearthstone'))
+    cv2.waitKey(10)
+cv2.destroyAllWindows()
+       #+end_src
+
+       #+begin_src sh
+       python part1_eval.py twitch/Hearthstone/13470812000/c3673800/raws/live_user_morikcm_1391579178.flv
+       #+end_src
+
+       This secondary evaluation revealed that dataset bias is a factor in the
+       accuracy of tiny images. For example, the following frame is (wrongly)
+       marked as being of a Hearthstone game. It is, however, of the
+       Hearthstone menu.
+
+       #+caption: A false positive marked as being a Hearthstone Game frame by linear SVM + Tiny Images
+       [[file:figs/tiny_false-positive.png]]
+
+       However, after training on a couple more videos, the I stopped seeing
+       false positives. Some false negatives still pop up, but are to be
+       expected (for example: I identify the blurred frames at the end of a
+       game as /Not Hearthstone/, so when a blurred frame occurs in the middle
+       of the game, it gets classified as /Not Hearthstone/ because the blur
+       dominates everything else.
 
 ** Random Utils
 *** OpenCV Key Printer

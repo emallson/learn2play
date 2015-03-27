@@ -11,3 +11,5 @@ venv
 # tangled files
 *.py
 /experimental/twitch/
+/experimental/datasets/
+/experimental/training/
