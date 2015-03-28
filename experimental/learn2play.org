@@ -14,24 +14,26 @@
      need to note the exact frames at which the transition from Hearthstone to
      Not (or visa-versa) occurs.
 
-     This is a tool to annotate videos with binary labels.
 
-     #+begin_src python
+***** Annotation Tool
+      This is a tool to annotate videos with binary labels.
+
+      #+begin_src python
 import numpy as np
 import cv2
 import sys
 from functools import partial
      #+end_src
 
-     #+name: load_video
-     #+begin_src python
+      #+name: load_video
+      #+begin_src python
 def load_video(filename):
     cap = cv2.VideoCapture(filename)
     return cap, current_frame(cap), num_frames(cap)
      #+end_src
 
-     #+name: meta
-     #+begin_src python
+      #+name: meta
+      #+begin_src python
 def num_frames(cap):
     return int(cap.get(cv2.cv.CV_CAP_PROP_FRAME_COUNT))
 
@@ -39,8 +41,8 @@ def current_frame(cap):
     return int(cap.get(cv2.cv.CV_CAP_PROP_POS_FRAMES))
      #+end_src
 
-     #+name: seek
-     #+begin_src python
+      #+name: seek
+      #+begin_src python
 def seek(cap, pos):
     if pos > num_frames(cap):
         raise Exception
@@ -48,7 +50,7 @@ def seek(cap, pos):
     cap.set(cv2.cv.CV_CAP_PROP_POS_FRAMES, pos)
      #+end_src
 
-     #+begin_src python
+      #+begin_src python
 def main():
     cap, position, max_position = load_video(sys.argv[1])
 
@@ -105,9 +107,6 @@ def main():
 if __name__ == "__main__":
     main()
      #+end_src
-
-
-
 **** Classifying
 
 ***** Extracting Frames

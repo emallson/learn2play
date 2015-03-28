@@ -1,0 +1,276 @@
+# -*- org-latex-pdf-process: ("pdflatex -interaction nonstopmode -output-directory %o %f" "bibtex %b" "pdflatex -interaction nonstopmode -output-directory %o %f" "pdflatex -interaction nonstopmode -output-directory %o %f") -*-
+
+#+latex_class: article
+#+latex_class_options: [10pt,twocolumn,letterpaper]
+#+latex_header: \include{cvpr_packages}
+
+
+#+latex_header: \def\cvprPaperID{****} % *** Enter the CVPR Paper ID here
+#+latex_header: \def\httilde{\mbox{\tt\raisebox{-.5ex}{\symbol{126}}}}
+
+#+latex_header: \ifcvprfinal\pagestyle{empty}\fi
+
+#+latex_header: \cvprfinalcopy
+
+#+bind: org-latex-default-packages-alist ()
+
+#+bind: org-latex-pdf-process
+
+#+macro: NL @@latex:\\@@
+
+#+title: Learning to Play Blizzard Entertainment's /Hearthstone/
+#+author: J David Smith {{{NL}}} University of Kentucky {{{NL}}} Lexington, KY, USA {{{NL}}} @@latex: {\tt\small emallson@cs.uky.edu}@@
+#+options: toc:nil
+
+#+BEGIN_LaTeX
+  \begin{abstract}
+    One of the goals of computer vision is to develop techniques that allow
+    computers to understand and interact with our world through imagery. A
+    classic challenge in this area is choosing a problem that is both
+    sufficiently constrained to be tractable and popular enough to have
+    significant available data. I claim that the task of automatically playing
+    video games ('botting' them) is such a problem. I make use of well-understood
+    machine-learning and computer vision techniques to develop a 'bot' which is
+    capable of playing Blizzard Entertainment's Hearthstone effectively. I
+    conclude with a discussion about the potential for such bots as vehicles for
+    computer vision research.
+  \end{abstract}
+#+END_LaTeX
+* Progress                                                                                         :draftonly:
+  - Collected data. I have 40GB of Hearthstone video on my laptop, and several
+    hundred GB of other video on Vulture which may or may not be needed
+    (probably not)
+  - Trained an accurate 2-class Linear SVM to predict given a frame whether it
+    is of a game of Hearthstone or not.
+* Issues                                                                                           :draftonly:
+  - Time will be the biggest challenge I face. There are a lot of pieces to
+    this particular puzzle. I would be really happy if I managed to complete
+    the whole thing. However, I will be reasonably satisfied if I can
+    accurately annotate all of the information on a frame of Hearthstone.
+
+  - Reducing annotation time. This ties into the above. The naïve approach
+    would have me annotate everything as it is needed, but I'd like to find
+    better ways to accomplish the same thing without having to spend a lot of
+    time on manual annotation.
+
+* Introduction
+  The ability to understand the world through images is one of the primary
+  goals of computer vision. However, the world is enormously large and
+  unimaginably complex. As a result, tackling that task directly is
+  intractable. The research community has instead focused on important
+  individual pieces: object detection and classification, scene classification,
+  and geometric understanding, among other things. I propose to take a step
+  closer to interaction with the real world by interacting with limited
+  mini-worlds in the form of video games.
+
+  The inspiration for this paper is the observation that video games form
+  natural 'mini-worlds'.  The size and scope of even the largest video game is
+  significantly smaller than that of the real world.  Therefore, successfully
+  interpreting the imagery presented by a game is a considerably smaller
+  problem than that of doing so in the real world, although it requires very
+  similar methods.  The limited forms of interactions available in video games
+  may also be seen as a benefit.  This reduces the set of tasks any successful
+  bot must be able to perform from nearly all of them to a small subset in a
+  natural way.  Further, games often provide concrete ways to measure success.
+  This helps to avoid the problem of determining how successful a machine is at
+  interacting with the world.  Video games also often demand that action be
+  taken in real time.  While a broad genre of turn-based games exists, it is
+  only one part of the larger ecosystem.  This places a valuable time
+  constraint on vision algorithms that is often neglected.
+
+  The problem of collecting data for experiments is also significantly easier
+  to tackle with video games.  Many players stream their games online, allowing
+  others to watch them play in real time.  Many of these streams are preserved
+  as videos which are viewable on-demand.  This presents a large corpus of
+  available data indexed in a logical fashion.  Annotating this data remains a
+  problem.  When this problem is not the subject of research, it is possible to
+  sidestep through careful choice of games.  When annotation is the subject of
+  research, researchers may take advantage of the nature of games to obtain
+  annotations automatically.  This is discussed further in section [[Discussion]].
+
+  In this paper I demonstrate that it is feasible to automatically collect data
+  for and play Blizzard Entertainment's game /Hearthstone/.  This game was
+  chosen for several reasons:
+
+  - It was popular, which allowed large quantities of data to be collected easily.
+  - It was at a reasonable medium between visual complexity and simplicity: most
+    visuals are composed of non-deforming objects being moved. This simplified
+    annotation.
+  - It had low timing requirements: turns in /Hearthstone/ may last up to 90
+    seconds. This was seen as important because I was unsure of the speed of
+    existing methods. Other games have much tighter requirements. For example:
+    /DotA 2/ players need to react in less than 300ms in order to be remotely
+    competitive.
+  - It was easy to model the decision process with existing research.
+
+  #+name: fig:vg_comp
+  #+caption: A Classic video game (top left; played by Google\cite{google-gaming}) versus Modern video games. Games shown: Breakout, Hearthstone, DotA 2, Guild Wars 2
+  [[./figs/video_game_comparison.png]]
+
+* Related Work
+
+  - Google Paper\cite{google-gaming}
+  - SURF Paper?
+  - Tiny Images Paper?
+  - Multi-Agent Markov Decision Processes Paper?
+  - Linear SVM?
+  - Cite OpenCV + Scikit-Learn?
+  - ...
+
+* Problem Statement
+* Approach
+
+  While deep-learning approaches are popular at present, I chose to construct
+  the /Hearthstone/ bot out of older, well-understood components rather than
+  trying to train a deep network to play it directly from video.  This was
+  motivated by practicality: fast implementations exist for older ideas like
+  SVM, and debugging individual pieces is easier than debugging the whole. The
+  use of older techniques has an additional benefit: research has advanced
+  since Linear SVMs were state of the art, so it stands to reason that more
+  advanced games are playable /right now/ if sufficiently fast implementations
+  exist for newer methods.
+
+  The task of playing hearthstone was broken down into several pieces: data
+  collection, annotation, play prediction, and input prediction.
+
+** Data Collection
+
+   One of the largest streaming websites on the Internet is /Twitch.tv/. At the
+   time of writing, this website reported hundreds of 'channels' presently
+   online. Many of these channels have all or part of their streams stored
+   long-term for on-demand viewing.  I tapped this resource, collecting $X \geq 40$ GB
+   of videos tagged as /Hearthstone/.
+
+   *Note:* Collection will likely continue, increasing the value of $X$.
+
+   It is important to note that this collection method has a problem: streamers
+   overlaying information onto their streams. Figures [[fig:hs_main_menu]] and
+   [[fig:streamer_sample]] show how /Hearthstone/'s main menu normally looks and
+   how it looks on a randomly chosen stream, respectively.  However, streamers
+   very rarely obscure important information, so it rarely poses more than a
+   generalization problem for classifiers.
+
+   #+name: fig:hs_main_menu
+   #+caption: The /Hearthstone/ main menu as it normally appears. *TODO:* Get recent screenshot. This one is old (from alpha/beta).
+   [[./figs/hearthstone_main_menu.jpg]]
+   #+name: fig:streamer_sample
+   #+caption: Many streamers overlay graphics including webcams and other video feeds on their streams. This is the Hearthstone main menu as it appeared on /morikcm/'s stream.
+   [[./figs/streamer_overlays.png]]
+
+** Data Annotation
+
+   #+name: fig:streamer-in-game
+   #+caption: A game in progress. The streamer is playing a Mage, has 30 Health and 0 Armor, has 1 Mana out of 5 Maximum, and has 3 cards on the board and 4 in his hand.
+   #+caption: His opponent is playing a Shaman, has 26 Health and 0 Armor, has 0 Mana out of 5 Maximum, and has 1 card on the board and 5 in his hand.
+   [[./figs/streamer_game_board.png]]
+
+   In annotating the videos, we seek to extract all important information for
+   understanding the scene.  For this paper, it is done with a collection of
+   detectors and classifiers.  In /Hearthstone/, we want to know the following
+   information:
+
+   1. Is this frame of a /Hearthstone/ game?
+
+      Sometimes videos are mis-labeled or streamers switch games without
+      changing what their stream is tagged as.
+
+   2. What is each player's:
+      - Rank: Higher rank means more experienced player.
+      - Class: There are 8 classes, each of which has access to a different set
+        of extra cards
+      - Mana & Maximum Mana: Mana is the resource players use to take
+        actions. The maximum value varies throughout the game.
+      - Health & Armor: Health is a resource which determines the winner. First
+        player to run out of Health loses. Armor is temporary added Health.
+
+   3. What cards are in play, where, and who owns them?
+
+      Cards may exist in a player's hand, on the table, or as a weapon.  Some
+      cards also have effects that depend on location on the table.
+
+   4. What effects and attributes does each card have?
+
+      There are special effects that can be placed on cards including /Taunt/,
+      which prevents attacking any card but the one with /Taunt/, and /Divine
+      Shield/, which absorbs 1 attack completely without draining the card's
+      Health. Each card also has its own Health and Attack values, which may
+      change as a result of other cards being played.
+
+   Annotation of (1) is done with a simple Linear SVM using $16\times 16$ Tiny
+   Images as features. Annotation of (2) is accomplished by running detectors
+   for each across the frame. Annotation of (3) is done by running a generic
+   detector across the screen and clustering each of the responses. This is
+   done because there are more than 500 distinct cards, and more are added
+   every few months.
+
+   *Note:* Descriptions of annotation methods are super vague now because I've
+   not done them yet.
+
+** Play Prediction
+
+   /Hearthstone/ is an adversarial 2-agent stochastic game, so I'm going to use
+   a multi-agent Markov Decision Process to represent it.
+
+** Input Prediction
+
+   This is predicting the input to perform in order to transition from the
+   present state to the desired one as predicted by [[Play Prediction]].
+
+* Evaluation
+
+  *Note:* Not sure if each individual kind of annotation should have its own
+   bit of evaluation. For the moment, the only one that's done is the
+   /Hearthstone/ or not classifier, so it is presented here.
+
+** Deciding if a Frame is of /Hearthstone/
+
+   I tried using SURF features with a Bag of Visual Words because I expected
+   the streamer overlays to cause some problems. I was disappointed with the
+   performance (see figure [[fig:surf_hs?]]).  I then tried Tiny Images, and they
+   performed so damn well that I don't feel the need to try anything else
+   (figure [[fig:tiny_hs?]]).  The ROC curve looks suspicious because of how good
+   it is, but the random samples of videos I've run it on look legitimate.
+   However, I just got it working late Thursday evening, so I haven't done
+   super extensive verification yet.  I probably won't unless I get an
+   indication that there is a problem.
+
+   #+name: fig:surf_hs?
+   #+caption: Linear SVM + SURF Histogram performance on frame type classification
+   [[file:../experimental/plots/roc_1000_hearthstone_model_surf_hist_upright_5000.png]]
+
+   #+name: fig:tiny_hs?
+   #+caption: Linear SVM + $16\times 16$ Tiny Images performance on frame type classification
+   [[file:../experimental/plots/roc_100_hearthstone_model_tiny_16x16.png]]
+* Applications
+** Building Better In-Game Bots
+   Currently, /Hearthstone/ has some bots to practice against. However, their most
+   advanced ones are pretty trivial to win against. A better bot could provide a
+   more advanced option for testing new strategies against strategies learned by
+   watching real players.
+** Outlier Detection
+   By looking at the learned transition function (see [[Play Prediction]]), it may
+   be possible to better identify cards and card combinations which are more
+   powerful than desired (outliers). While the Hearthstone developers already
+   have access to information on how people are playing the game, watching a
+   bot play from contrived scenarios may give further insight into why players
+   play the way they do.
+** Outsider Statistics
+   Third-party sites are ever-popular for online games. Many games (including
+   /Hearthstone/) have third-parties interested in keeping and displaying
+   statistics about their game (card statistics, common decks, win percentages,
+   etc), but do not have direct access to this information. A good classifier
+   could provide this information by watching streams and providing annotations
+   to these third parties.
+* Discussion
+  Something something this shows that bots are feasible something something
+  this shows that they provide good metrics for the efficacy of computer vision
+  methods something something.
+
+  It may also be possible to read annotations directly from a game's memory or
+  connection information. Blizzard has countermeasures against this and bans
+  accounts for doing so. However, for academic research they and other
+  developers may be willing to cooperate and provide easily-accessible
+  machine-readable annotations.
+
+\bibliography{l2p_hs}{}
+\bibliographystyle{ieee}
