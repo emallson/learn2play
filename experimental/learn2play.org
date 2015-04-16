@@ -374,9 +374,13 @@ class Vocabulary(luigi.Task):
 class Dataset(luigi.Task):
     rate = luigi.IntParameter(default=100)
     features = TaskParameter()
+    partitions = luigi.BooleanParameter(default=True)
 
     def known_paths(self):
-        return glob('twitch/Hearthstone/*/*/raws/*.flv.partitions')
+        path = 'twitch/Hearthstone/*/*/raws/*.flv'
+        if self.partitions:
+            path += '.partitions'
+        return glob(path)
 
     def response(self, partitions, frame_num):
         hearthstone = False
@@ -553,7 +557,7 @@ class ROCCurve(luigi.Task):
 
 ***** Putting it Together
 
-      #+begin_src python :tangle learn2play.py :comments both :noweb yes
+      #+begin_src python :tangle learn2play/hearthstone_classifier.py :comments both :noweb yes
 import luigi
 import cPickle as pickle
 import cv2
@@ -592,7 +596,7 @@ import luigi
 import sys
 from luigi.scheduler import CentralPlannerScheduler as CSP
 from luigi.worker import Worker
-from learn2play import ROCCurve, HearthstoneModel, SURFHistograms
+from learn2play.hearthstone_classifier import ROCCurve, HearthstoneModel, SURFHistograms
 
 roc = ROCCurve(
     rate=1000,
@@ -667,6 +671,8 @@ tinyfy = TinyFeatures(video='', rate=1000).features
 
 cap = cv2.VideoCapture(argv[1])
 
+print(argv[1])
+
 def textify(frame, text):
     copy = frame.copy()
     cv2.putText(copy, text, (10,100), cv2.FONT_HERSHEY_SIMPLEX, 2, 255)
@@ -674,10 +680,8 @@ def textify(frame, text):
 
 cv2.namedWindow('frame')
 for frame in frames(cap):
-    print frame.shape
     tiny = tinyfy(frame)
     prediction = classifier.predict([tiny])
-    print prediction
     if prediction == 1:
         cv2.imshow('frame', textify(frame, 'Hearthstone'))
     else:
@@ -704,6 +708,208 @@ cv2.destroyAllWindows()
        game as /Not Hearthstone/, so when a blurred frame occurs in the middle
        of the game, it gets classified as /Not Hearthstone/ because the blur
        dominates everything else.
+
+*** Amount of Mana
+**** Experiment: Contour Method                                                                      :ARCHIVE:
+    :PROPERTIES:
+    :header-args: :session detect-mana-python :results value file
+    :END:
+
+     Load up a known /Hearthstone/ frame. Write it out for reference.
+
+    #+begin_src python
+import cv2
+import numpy as np
+import scipy.misc
+import os
+from matplotlib import pyplot as plt
+
+cap = cv2.VideoCapture('twitch/Hearthstone/13469865024/c5197696/raws/live_user_sinedd92_1411887437.flv')
+
+ret, frame = cap.read()
+frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+orig_path = 'experiments/contours/orig.png'
+
+if not os.path.exists(os.path.dirname(orig_path)):
+    os.makedirs(os.path.dirname(orig_path))
+
+scipy.misc.imsave(orig_path, frame)
+
+orig_path
+    #+end_src
+
+    #+RESULTS:
+    [[file:experiments/contours/orig.png]]
+
+    Split it into roughly the top and bottom halves. Top = opponent, bottom = player
+    #+begin_src python
+middle = int(frame.shape[0] / 2)
+top, bottom = frame[:middle,:,:], frame[middle:,:,:]
+
+top_path = 'experiments/contours/top.png'
+bottom_path = 'experiments/contours/bottom.png'
+scipy.misc.imsave(top_path, top)
+scipy.misc.imsave(bottom_path, bottom)
+top_path
+    #+end_src
+
+    #+RESULTS:
+    [[file:experiments/contours/top.png]]
+
+    #+begin_src python
+bottom_path
+    #+end_src
+
+    #+RESULTS:
+    [[file:experiments/contours/bottom.png]]
+
+    Now find contours...
+    #+begin_src python
+im = bottom.copy()
+im = im.cvtColor(im, cv2.COLOR_RGB2GRAY)
+contours, hierarchy = cv2.findContours(im, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+im = bottom.copy()
+cv2.drawContours(im, contours, -1, (255, 0, 0))
+bc_path = 'experiments/contours/bottom_contours.png'
+scipy.misc.imsave(bc_path, im)
+bc_path
+    #+end_src
+
+    #+RESULTS:
+    [[file:experiments/contours/bottom_contours.png]]
+
+    This result clearly sucks.
+
+    Let's try running it on just the blue channel. =bottom= is RGB, so:
+
+    #+begin_src python
+im = bottom[:,:,3].copy()
+contours, hierarchy = cv2.findContours(im, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+im = bottom.copy()
+cv2.drawContours(im, contours, -1, (255, 0, 0))
+bc_blue_path = 'experiments/contours/bottom_blue_contours.png'
+scipy.misc.imsave(bc_blue_path, im)
+bc_blue_path
+    #+end_src
+
+    #+RESULTS:
+    [[file:experiments/contours/bottom_blue_contours.png]]
+
+    Still a nope. Moving on.
+*** Card Detection
+
+    I have chosen to split card detection into two components: cards on the
+    board and cards not on the board. The reason for this is that the two
+    classes are visually distinct. Cards on the board lose the actual card
+    border and display only the ellipsized portrait.
+
+    I may revisit this decision in the future, particularly as I begin training
+    the second detector. It may make sense to simply extend the positive set
+    rather than constructing a second detector, but I'll cross that bridge
+    another day.
+**** Constructing the Datasets
+
+     I have located a zip file containing the full versions of the original
+     ~700 Hearthstone cards. This forms the basis of my positive set. I may
+     consider shears as possible augmentation later (light shearing is common
+     in Hearthstone).
+
+     #+name: card-detector:data:positive
+     #+begin_src python
+class PositiveDataset(luigi.Task):
+    def output(self):
+        return luigi.LocalTarget('./datasets/card-detector/positive')
+
+    def run(self):
+        target_dir = self.output().path
+        if not os.path.exists(target_dir):
+            os.makedirs(target_dir)
+
+        zip_path = './datasets/card-detector/hearthstone_cards.zip'
+        if not os.path.exists(zip_path):
+            raise Exception('Please download the hearthstone data from: http://www.mediafire.com/download/2a25cf1wb1p1acl/hearthstone+cards.zip')
+
+        from zipfile import ZipFile
+        with ZipFile.open(zip_path) as z:
+            z.extractall(target_dir)
+     #+end_src
+
+     My negative set consists of random rectangles taken from frames identified
+     as being Hearthstone.
+
+     #+begin_src python
+class RandomRectangles(Features):
+    # this is an abuse of inheritance. The .npz files created by this task
+    # contain nothing. They're effectively marks indicating which videos have
+    # been processed.
+    from hearthstone_classifier import Features
+    from uuid import uuid4
+    from skimage.io import imsave
+
+    count = luigi.IntParameter(default=5)
+    min_size = luigi.IntParameter(default=50)
+    max_size = luigi.IntParameter(default=800)
+
+    out_dir = './datasets/card-detector/negative'
+    def identifier(self):
+        return 'random_rectangles'
+
+    def features(self, frame):
+        sizes = np.ndarray((self.count, 2))
+        for i in range(self.count):
+            height = np.random.randint(self.min_size, self.max_size)
+            width = np.random.randint(self.min_size, self.max_size)
+
+            sizes[i,:] = [height, width]
+
+            frame_size = self.frame.shape[0:2]
+            top_right = (np.random.randint(0, frame_size[0] - width),
+                         np.random.randint(0, frame_size[1] - height))
+
+            im = frame[top_right[0]:top_right[0] + width,
+                       top_right[1]:top_right[1] + height,
+                       :]
+
+            filename = uuid4().get_hex() + '.jpg'
+            path = os.path.join(out_dir, filename)
+
+            imsave(path, im)
+        return sizes
+     #+end_src
+
+
+     #+name: card-detector:data:negative
+     #+begin_src python
+class NegativeDataset(luigi.Task):
+
+    def requires(self):
+        return PositiveDataset()
+
+    def output(self):
+        pass
+
+    def run(self):
+        pass
+     #+end_src
+
+
+**** Putting it Together
+
+     #+begin_src python :tangle learn2play/card_detector.py :comments both :noweb yes
+import luigi
+import cPickle as pickle
+import cv2
+import sklearn
+import numpy as np
+import random
+from matplotlib import pyplot as plt
+import os
+import sys
+from glob import glob, iglob
+
+if __name__ == "__main__":
+    luigi.run(local_scheduler=True)
+     #+end_src
 
 ** Random Utils
 *** OpenCV Key Printer
