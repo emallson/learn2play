@@ -918,12 +918,12 @@ class NegativeDataset(luigi.Task):
      #+end_src
 
 **** DLIB Object Detector
+***** Initial Test
+      Trying to use DLIB object detection to go from images of cards to a
+      cascade classifier.
 
-     Trying to use DLIB object detection to go from images of cards to a
-     cascade classifier.
-
-     #+name: card-detector:dlib-detector:solo
-     #+begin_src python
+      #+name: card-detector:dlib-detector:solo
+      #+begin_src python
 class DLIBDetector_SoloCards(luigi.Task):
     retrain = luigi.BooleanParameter(default=False)
 
@@ -994,10 +994,10 @@ class DLIBDetector_SoloCards(luigi.Task):
         print("Accuracy: {0}".format(dlib.test_simple_object_detector(test_imgs, test_boxes, detector)))
      #+end_src
 
-     Quick test script to see if we're getting detections.
+      Quick test script to see if we're getting detections.
 
-     #+name: card-detector:eval:dlib-detector
-     #+begin_src python :tangle dlib-eval.py
+      #+name: card-detector:eval:dlib-detector
+      #+begin_src python :tangle dlib-eval.py
 from __future__ import print_function
 import dlib
 from skimage import io
@@ -1026,21 +1026,30 @@ for path in test_ims:
         raw_input()
      #+end_src
 
-     Nope. Trying to label real images with dlib's =imglab= tool. Labels are:
+      Nope.
 
-     - card
-     - minion
-     - hero
-     - mana_counter
-     - hero_power
-     - card_back
-     - weapon
+***** Round 2: =imglab=
+      Trying to label real images with dlib's =imglab= tool. Labels are:
 
-     After some testing it appears that I have to annotate them all in
-     *separate* XML files. No big deal, but annoying. Testing on minions:
+      - card
+      - minion
+      - hero
+      - mana_counter
+      - hero_power
+      - card_back
+      - weapon
 
-     #+name: card-detector:dlib-detector:minion
-     #+begin_src python
+      After some testing it appears that I have to annotate them all in
+      *separate* XML files (because they have different aspect ratios. No big
+      deal, but annoying.
+
+***** +Card+ Minion Detection
+
+      My minion bounding boxes all have consistent aspect ratios, so I'm going
+      to try those first instead of cards.
+
+      #+name: card-detector:dlib-detector:minion
+      #+begin_src python
 class DLIBDetector_Minion(luigi.Task):
     retrain = luigi.BooleanParameter(default=False)
 
@@ -1071,8 +1080,8 @@ class DLIBDetector_Minion(luigi.Task):
         print("Accuracy: {0}".format(dlib.test_simple_object_detector('./real_minions.xml', self.output().path)))
      #+end_src
 
-     #+name: card-detector:eval:dlib-detector:minion
-     #+begin_src python :tangle dlib-eval-minion.py
+      #+name: card-detector:eval:dlib-detector:minion
+      #+begin_src python :tangle dlib-eval-minion.py
 from __future__ import print_function
 import dlib
 from skimage import io
@@ -1102,21 +1111,21 @@ for path in test_ims:
         raw_input()
      #+end_src
 
-     Great success!
+      Great success!
 
-     #+caption: Minion detection results on an unseen screencap.
-     [[file:figs/minion-detection.png]]
+      #+caption: Minion detection results on an unseen screencap.
+      [[file:figs/minion-detection.png]]
 
-     I have run into a couple of failure cases, but believe that extending the
-     training set (this set is a mere *10 frames!*) will resolve this.
+      I have run into a couple of failure cases, but believe that extending the
+      training set (this set is a mere *10 frames!*) will resolve this.
 
-     The most *important* failure case is shown here in the middle of the
-     player's board: less than all of the minion is contained within the
-     bounding box. If this occurs /consistently/ (ie ∀ a,b instances of the
-     minion M: box(a) ≡ box(b)), then it is not a problem. If not, then it
-     could cause classification problems. Probably best to try to avoid it.
+      The most *important* failure case is shown here in the middle of the
+      player's board: less than all of the minion is contained within the
+      bounding box. If this occurs /consistently/ (ie ∀ a,b instances of the
+      minion M: box(a) ≡ box(b)), then it is not a problem. If not, then it
+      could cause classification problems. Probably best to try to avoid it.
 
-     Besides, it looks ugly.
+      Besides, it looks ugly.
 
 **** Putting it Together
 
