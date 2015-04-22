@@ -1,0 +1,145 @@
+<?xml version='1.0' encoding='ISO-8859-1'?>
+<?xml-stylesheet type='text/xsl' href='image_metadata_stylesheet.xsl'?>
+<dataset>
+  <name>imglab dataset</name>
+  <comment>Created by imglab tool.</comment>
+  <images>
+    <image file='/home/emallson/Code/learn2play/experimental/datasets/card-detector/real/0.jpg'>
+      <box top='340' left='595' width='88' height='116'>
+        <label>minion</label>
+      </box>
+      <box top='210' left='598' width='100' height='119'>
+        <label>minion</label>
+      </box>
+    </image>
+    <image file='/home/emallson/Code/learn2play/experimental/datasets/card-detector/real/1.jpg'>
+      <box top='208' left='595' width='105' height='123'>
+        <label>minion</label>
+      </box>
+      <box top='339' left='507' width='82' height='112'>
+        <label>minion</label>
+      </box>
+      <box top='340' left='599' width='84' height='118'>
+        <label>minion</label>
+      </box>
+      <box top='340' left='691' width='91' height='111'>
+        <label>minion</label>
+      </box>
+    </image>
+    <image file='/home/emallson/Code/learn2play/experimental/datasets/card-detector/real/10.jpg'>
+      <box top='344' left='511' width='81' height='111'>
+        <label>minion</label>
+      </box>
+      <box top='212' left='551' width='98' height='119'>
+        <label>minion</label>
+      </box>
+      <box top='213' left='649' width='91' height='121'>
+        <label>minion</label>
+      </box>
+      <box top='344' left='596' width='96' height='122'>
+        <label>minion</label>
+      </box>
+      <box top='345' left='693' width='96' height='111'>
+        <label>minion</label>
+      </box>
+    </image>
+    <image file='/home/emallson/Code/learn2play/experimental/datasets/card-detector/real/11.jpg'>
+      <box top='218' left='505' width='93' height='115'>
+        <label>minion</label>
+      </box>
+      <box top='217' left='599' width='86' height='121'>
+        <label>minion</label>
+      </box>
+      <box top='218' left='686' width='93' height='127'>
+        <label>minion</label>
+      </box>
+    </image>
+    <image file='/home/emallson/Code/learn2play/experimental/datasets/card-detector/real/12.jpg'>
+      <box top='346' left='542' width='101' height='125'>
+        <label>minion</label>
+      </box>
+      <box top='341' left='646' width='102' height='120'>
+        <label>minion</label>
+      </box>
+      <box top='220' left='686' width='93' height='122'>
+        <label>minion</label>
+      </box>
+      <box top='217' left='598' width='89' height='121'>
+        <label>minion</label>
+      </box>
+      <box top='217' left='506' width='93' height='121'>
+        <label>minion</label>
+      </box>
+    </image>
+    <image file='/home/emallson/Code/learn2play/experimental/datasets/card-detector/real/13.jpg'>
+      <box top='217' left='550' width='91' height='117'>
+        <label>minion</label>
+      </box>
+      <box top='219' left='646' width='87' height='118'>
+        <label>minion</label>
+      </box>
+      <box top='344' left='647' width='91' height='114'>
+        <label>minion</label>
+      </box>
+      <box top='346' left='545' width='98' height='125'>
+        <label>minion</label>
+      </box>
+    </image>
+    <image file='/home/emallson/Code/learn2play/experimental/datasets/card-detector/real/14.jpg'>
+      <box top='345' left='557' width='83' height='115'>
+        <label>minion</label>
+      </box>
+      <box top='344' left='649' width='91' height='113'>
+        <label>minion</label>
+      </box>
+      <box top='217' left='604' width='85' height='122'>
+        <label>minion</label>
+      </box>
+    </image>
+    <image file='/home/emallson/Code/learn2play/experimental/datasets/card-detector/real/15.jpg'>
+      <box top='219' left='601' width='88' height='121'>
+        <label>minion</label>
+      </box>
+      <box top='347' left='461' width='85' height='113'>
+        <label>minion</label>
+      </box>
+      <box top='347' left='561' width='77' height='110'>
+        <label>minion</label>
+      </box>
+      <box top='345' left='650' width='82' height='119'>
+        <label>minion</label>
+      </box>
+      <box top='344' left='740' width='86' height='114'>
+        <label>minion</label>
+      </box>
+    </image>
+    <image file='/home/emallson/Code/learn2play/experimental/datasets/card-detector/real/16.jpg'>
+      <box top='225' left='602' width='83' height='114'>
+        <label>minion</label>
+      </box>
+      <box top='347' left='508' width='87' height='113'>
+        <label>minion</label>
+      </box>
+      <box top='344' left='604' width='83' height='114'>
+        <label>minion</label>
+      </box>
+      <box top='349' left='697' width='82' height='109'>
+        <label>minion</label>
+      </box>
+    </image>
+    <image file='/home/emallson/Code/learn2play/experimental/datasets/card-detector/real/17.jpg'>
+      <box top='226' left='558' width='80' height='112'>
+        <label>minion</label>
+      </box>
+      <box top='351' left='556' width='84' height='107'>
+        <label>minion</label>
+      </box>
+      <box top='350' left='648' width='88' height='107'>
+        <label>minion</label>
+      </box>
+      <box top='224' left='640' width='98' height='116'>
+        <label>minion</label>
+      </box>
+    </image>
+  </images>
+</dataset>

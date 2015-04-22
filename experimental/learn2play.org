@@ -193,11 +193,18 @@ class Features(luigi.Task):
 class TaskParameter(luigi.Parameter):
     def parse(self, x):
         if type(x) == str:
-            cls = globals()[x]
+            cls = None
+            for key, module in sys.modules.items():
+                if hasattr(module, x):
+                    cls = getattr(module, x)
+                    if issubclass(cls, luigi.Task):
+                        break
+                    else:
+                        cls = None
         else:
             cls = x
 
-        if issubclass(cls, luigi.Task) and not cls == luigi.Task:
+        if cls is not None and issubclass(cls, luigi.Task) and not cls == luigi.Task:
             return cls
         else:
             raise ValueError('Unknown task requested.')
@@ -368,17 +375,17 @@ class Vocabulary(luigi.Task):
 
 ***** Constructing the SVM Model
 
-      #+name: task:svm-hs?
+      #+name: task:svm-hs
       #+begin_src python
 
 class Dataset(luigi.Task):
     rate = luigi.IntParameter(default=100)
     features = TaskParameter()
-    partitions = luigi.BooleanParameter(default=True)
+    all_videos = luigi.BooleanParameter(default=False)
 
     def known_paths(self):
         path = 'twitch/Hearthstone/*/*/raws/*.flv'
-        if self.partitions:
+        if not self.all_videos:
             path += '.partitions'
         return glob(path)
 
@@ -573,7 +580,7 @@ from glob import glob, iglob
 <<all_features>>
 
 
-<<task:svm-hs?>>
+<<task:svm-hs>>
 
 <<task:roc>>
 
@@ -658,7 +665,7 @@ if w.run():
        overlay of whether it is =Hearthstone= or =Not Hearthstone=.
        #+begin_src python :tangle part1_eval.py :noweb yes :exports none
 import cv2
-from learn2play import *
+from learn2play.hearthstone_classifier import *
 from sys import argv
 from sklearn.externals import joblib
 
@@ -817,6 +824,17 @@ bc_blue_path
      #+name: card-detector:data:positive
      #+begin_src python
 class PositiveDataset(luigi.Task):
+    zip_path = luigi.Parameter(default='./datasets/card-detector/hearthstone cards.zip')
+
+    # def complete(self):
+    #     from zipfile import ZipFile
+    #     with ZipFile(self.zip_path) as z:
+    #         members = set(z.namelist())
+    #     extracted = set([os.path.join(self.output().path, os.path.relpath(dirpath, self.output().path), name)
+    #                      for (dirpath, dirnames, filenames) in os.walk(self.output().path)
+    #                      for name in filenames])
+    #     return members <= extracted
+
     def output(self):
         return luigi.LocalTarget('./datasets/card-detector/positive')
 
@@ -825,36 +843,38 @@ class PositiveDataset(luigi.Task):
         if not os.path.exists(target_dir):
             os.makedirs(target_dir)
 
-        zip_path = './datasets/card-detector/hearthstone_cards.zip'
-        if not os.path.exists(zip_path):
-            raise Exception('Please download the hearthstone data from: http://www.mediafire.com/download/2a25cf1wb1p1acl/hearthstone+cards.zip')
+        if not os.path.exists(self.zip_path):
+            raise Exception("""Please download the hearthstone data from:
+http://www.mediafire.com/download/2a25cf1wb1p1acl/hearthstone+cards.zip
+
+Place it in the `datasets/card-detector` directory or specify --zip_path=..""")
 
         from zipfile import ZipFile
-        with ZipFile.open(zip_path) as z:
+        with ZipFile(self.zip_path) as z:
             z.extractall(target_dir)
      #+end_src
 
      My negative set consists of random rectangles taken from frames identified
      as being Hearthstone.
 
+     #+name: card-detector:feat:randomrectangles
      #+begin_src python
+from hearthstone_classifier import Features
 class RandomRectangles(Features):
     # this is an abuse of inheritance. The .npz files created by this task
     # contain nothing. They're effectively marks indicating which videos have
     # been processed.
-    from hearthstone_classifier import Features
-    from uuid import uuid4
-    from skimage.io import imsave
-
     count = luigi.IntParameter(default=5)
     min_size = luigi.IntParameter(default=50)
-    max_size = luigi.IntParameter(default=800)
+    max_size = luigi.IntParameter(default=600)
 
     out_dir = './datasets/card-detector/negative'
     def identifier(self):
         return 'random_rectangles'
 
     def features(self, frame):
+        from uuid import uuid4
+        from skimage.io import imsave
         sizes = np.ndarray((self.count, 2))
         for i in range(self.count):
             height = np.random.randint(self.min_size, self.max_size)
@@ -862,16 +882,21 @@ class RandomRectangles(Features):
 
             sizes[i,:] = [height, width]
 
-            frame_size = self.frame.shape[0:2]
-            top_right = (np.random.randint(0, frame_size[0] - width),
-                         np.random.randint(0, frame_size[1] - height))
+            frame_size = frame.shape[0:2]
+            top_left = (np.random.randint(0, frame_size[0] - width) if frame_size[0] - width > 0 else 0,
+                        np.random.randint(0, frame_size[1] - height) if frame_size[1] - height> 0 else 0)
+            bottom_right = (min(top_left[0] + width, frame_size[0]),
+                            min(top_left[1] + height, frame_size[1]))
 
-            im = frame[top_right[0]:top_right[0] + width,
-                       top_right[1]:top_right[1] + height,
+            im = frame[top_left[0]:bottom_right[0],
+                       top_left[1]:bottom_right[1]
                        :]
 
+            # if not im.shape == (height, width, 3):
+            #     print(im.shape)
+
             filename = uuid4().get_hex() + '.jpg'
-            path = os.path.join(out_dir, filename)
+            path = os.path.join(self.out_dir, filename)
 
             imsave(path, im)
         return sizes
@@ -880,18 +905,218 @@ class RandomRectangles(Features):
 
      #+name: card-detector:data:negative
      #+begin_src python
+<<card-detector:feat:randomrectangles>>
+
+
 class NegativeDataset(luigi.Task):
 
     def requires(self):
-        return PositiveDataset()
+        return PositiveDataset(), RandomRectangles(rate=1000)
 
     def output(self):
-        pass
-
-    def run(self):
-        pass
+        return luigi.LocalTarget('./datasets/card-detector/negative')
      #+end_src
 
+**** DLIB Object Detector
+
+     Trying to use DLIB object detection to go from images of cards to a
+     cascade classifier.
+
+     #+name: card-detector:dlib-detector:solo
+     #+begin_src python
+class DLIBDetector_SoloCards(luigi.Task):
+    retrain = luigi.BooleanParameter(default=False)
+
+    def complete(self):
+        if self.retrain:
+            return False
+        else:
+            return super(self, luigi.Task).complete()
+
+    def requires(self):
+        return {'positive': PositiveDataset(), 'negative': NegativeDataset()}
+
+    def output(self):
+        return luigi.LocalTarget('training/card-detector.svm')
+
+    def run(self):
+        import os
+        from glob import glob, iglob
+        import dlib
+        from skimage import io
+        from skimage import transform as tf
+        from sklearn.cross_validation import train_test_split
+
+        options = dlib.simple_object_detector_training_options()
+        options.C = 5
+        options.num_threads = 4
+        options.be_verbose = True
+
+        def full_box(im):
+            return dlib.rectangle(top=0,
+                                  left=0,
+                                  right=im.shape[1],
+                                  bottom=im.shape[0])
+        def top_box(im):
+            return dlib.rectangle(top=0,
+                                  left=0,
+                                  right=im.shape[1],
+                                  bottom=im.shape[0]/2)
+
+        def portrait_box(im):
+            return dlib.rectangle(top=0,
+                                  bottom=242,
+                                  left=70,
+                                  right=240)
+
+        def imread(path):
+            return io.imread(path)[:,:,0:3].copy()
+
+        full = [imread(img_path) for img_path in
+                iglob(os.path.join(self.input()['positive'].path, '*.png'))]
+        small = [tf.rescale(im, 0.33) for im in full]
+        imgs = full + small
+        boxes = [[portrait_box(im)] for im in imgs]
+
+        negatives = [imread(img_path) for img_path in
+                     glob(os.path.join(self.input()['negative'].path, '*.jpg'))[:1400]]
+        negative_boxes = [[] for neg in negatives]
+
+        imgs += negatives
+        boxes += negative_boxes
+
+        train_imgs, test_imgs, train_boxes, test_boxes = train_test_split(imgs, boxes, test_size=0.2)
+        print(len(train_imgs), len(train_boxes))
+
+        detector = dlib.train_simple_object_detector(train_imgs, train_boxes, options)
+        detector.save(self.output().path)
+
+        print("Accuracy: {0}".format(dlib.test_simple_object_detector(test_imgs, test_boxes, detector)))
+     #+end_src
+
+     Quick test script to see if we're getting detections.
+
+     #+name: card-detector:eval:dlib-detector
+     #+begin_src python :tangle dlib-eval.py
+from __future__ import print_function
+import dlib
+from skimage import io
+from learn2play.card_detector import DLIBDetector_SoloCards
+from glob import iglob
+
+test_ims = iglob('./datasets/card-detector/real/*.jpg')
+
+det = dlib.simple_object_detector(DLIBDetector_SoloCards().output().path)
+
+win = dlib.image_window()
+win.set_image(det)
+
+raw_input()
+
+for path in test_ims:
+    im = io.imread(path)
+    dets = det(im)
+    print(len(dets))
+
+    win.clear_overlay()
+    win.set_image(im)
+    win.add_overlay(dets)
+
+    if len(dets) > 0:
+        raw_input()
+     #+end_src
+
+     Nope. Trying to label real images with dlib's =imglab= tool. Labels are:
+
+     - card
+     - minion
+     - hero
+     - mana_counter
+     - hero_power
+     - card_back
+     - weapon
+
+     After some testing it appears that I have to annotate them all in
+     *separate* XML files. No big deal, but annoying. Testing on minions:
+
+     #+name: card-detector:dlib-detector:minion
+     #+begin_src python
+class DLIBDetector_Minion(luigi.Task):
+    retrain = luigi.BooleanParameter(default=False)
+
+    def complete(self):
+        if self.retrain:
+            return False
+        else:
+            return super(self, luigi.Task).complete()
+
+    def output(self):
+        return luigi.LocalTarget('training/minion-detector.svm')
+
+    def run(self):
+        import os
+        from glob import glob, iglob
+        import dlib
+        from skimage import io
+        from skimage import transform as tf
+        from sklearn.cross_validation import train_test_split
+
+        options = dlib.simple_object_detector_training_options()
+        options.C = 5
+        options.num_threads = 4
+        options.be_verbose = True
+
+        dlib.train_simple_object_detector('./real_minions.xml', self.output().path, options)
+
+        print("Accuracy: {0}".format(dlib.test_simple_object_detector('./real_minions.xml', self.output().path)))
+     #+end_src
+
+     #+name: card-detector:eval:dlib-detector:minion
+     #+begin_src python :tangle dlib-eval-minion.py
+from __future__ import print_function
+import dlib
+from skimage import io
+from learn2play.card_detector import DLIBDetector_Minion
+from glob import iglob
+
+test_ims = iglob('./datasets/card-detector/real/*.jpg')
+
+det = dlib.simple_object_detector(DLIBDetector_Minion().output().path)
+
+win = dlib.image_window()
+win.set_title('Minion Detection')
+win.set_image(det)
+
+raw_input()
+
+for path in test_ims:
+    im = io.imread(path)
+    dets = det(im)
+    print(len(dets))
+
+    win.clear_overlay()
+    win.set_image(im)
+    win.add_overlay(dets)
+
+    if len(dets) > 0:
+        raw_input()
+     #+end_src
+
+     Great success!
+
+     #+caption: Minion detection results on an unseen screencap.
+     [[file:figs/minion-detection.png]]
+
+     I have run into a couple of failure cases, but believe that extending the
+     training set (this set is a mere *10 frames!*) will resolve this.
+
+     The most *important* failure case is shown here in the middle of the
+     player's board: less than all of the minion is contained within the
+     bounding box. If this occurs /consistently/ (ie ∀ a,b instances of the
+     minion M: box(a) ≡ box(b)), then it is not a problem. If not, then it
+     could cause classification problems. Probably best to try to avoid it.
+
+     Besides, it looks ugly.
 
 **** Putting it Together
 
@@ -906,6 +1131,17 @@ from matplotlib import pyplot as plt
 import os
 import sys
 from glob import glob, iglob
+
+<<card-detector:data:positive>>
+
+
+<<card-detector:data:negative>>
+
+
+<<card-detector:dlib-detector:solo>>
+
+
+<<card-detector:dlib-detector:minion>>
 
 if __name__ == "__main__":
     luigi.run(local_scheduler=True)
