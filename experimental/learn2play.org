@@ -1173,3 +1173,118 @@ while True:
 
 cv2.destroyAllWindows()
     #+end_src
+*** Frame Extractor
+
+    Quick utility to pull frames out of a video at a given sample rate.
+
+    Usage:
+    #+BEGIN_EXAMPLE
+    # python utils/extract-frames.py rate video [video...]
+    python utils/extract-frames.py 1000 twitch/Hearthstone/*/*/raws/*.flv
+    #+END_EXAMPLE
+
+    #+name: extract-frames
+    #+begin_src python :tangle utils/extract-frames.py :noweb yes
+from __future__ import print_function
+import cv2
+from skimage import io
+import os
+from hashlib import sha256
+import sys
+
+
+<<meta>>
+
+
+<<seek>>
+
+
+def frames(cap, rate=1):
+    index = current_frame(cap)
+
+    while cap.isOpened():
+        if rate > 1 and index > 0:
+            # don't need to seek if we're going frame by frame
+            # adding extra seeks is surprisingly slow
+            try:
+                seek(cap, index)
+            except:
+                break
+
+        ret, frame = cap.read()
+
+        if ret:
+            yield index, frame
+        else:
+            break
+
+        # note: cap.read() advances the current frame by 1
+        index += rate
+
+def extract_frames(rate, path, root='.'):
+    cap = cv2.VideoCapture(path)
+
+    fmt = os.path.join(root, "{hash}_{name}_{idx}.jpg")
+
+    name = os.path.basename
+    hasher = lambda p: sha256(p).hexdigest()
+
+    for idx, frame in frames(cap, rate):
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        io.imsave(fmt.format(hash=hasher(path),
+                             name=name(path),
+                             idx=idx),
+                  frame)
+
+    cap.release()
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser("Quick utility to extract frames from videos")
+    parser.add_argument("--root", type=str, default=".", help="Root folder to extract frames to")
+    parser.add_argument("rate", type=int,
+                        help="Rate at which to take frames. If n = rate, every nth frame is taken")
+    parser.add_argument("videos", nargs=argparse.REMAINDER)
+
+    args = parser.parse_args()
+
+    for path in args.videos:
+        print("Extracting frames from {0}...".format(path), file=sys.stderr)
+        extract_frames(args.rate, path, args.root)
+
+if __name__ == "__main__":
+    main()
+    #+end_src
+*** Predict Hearthstone
+
+    This script is based off of the output of [[Hearthstone or Not?]]. It returns 0
+    if the frame is /Hearthstone/, -1 otherwise.
+
+    #+name: utils:predict-hearthstone
+    #+BEGIN_SRC python :tangle utils/predict-hearthstone.py
+from __future__ import print_function
+from sklearn.externals import joblib
+from skimage.io import imread
+from scipy.misc import imresize
+import os
+import argparse
+from sys import exit
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--classifier', default=os.path.join(os.path.dirname(__file__), '../training/hearthstone_model_tiny_16x16.jl'))
+parser.add_argument('image')
+
+args = parser.parse_args()
+
+im = imread(args.image)
+im = im[:,:, ::-1]
+classifier = joblib.load(args.classifier)
+
+tiny = imresize(im, (16, 16)).reshape(-1)
+score = classifier.predict([tiny])
+
+if score[0] == 1:
+    exit(0)
+else:
+    exit(score[0])
+    #+END_SRC
