@@ -1050,6 +1050,12 @@ for path in test_ims:
 
       #+name: card-detector:dlib-detector:minion
       #+begin_src python
+class MinionLabels(luigi.task.ExternalTask):
+
+    def output(self):
+        return {'train': luigi.LocalTarget('datasets/detector/minions/train.xml'),
+                'test': luigi.LocalTarget('datasets/detector/minions/test.xml')}
+
 class DLIBDetector_Minion(luigi.Task):
     retrain = luigi.BooleanParameter(default=False)
 
@@ -1058,6 +1064,9 @@ class DLIBDetector_Minion(luigi.Task):
             return False
         else:
             return super(self, luigi.Task).complete()
+
+    def requires(self):
+        return MinionLabels()
 
     def output(self):
         return luigi.LocalTarget('training/minion-detector.svm')
@@ -1075,9 +1084,12 @@ class DLIBDetector_Minion(luigi.Task):
         options.num_threads = 4
         options.be_verbose = True
 
-        dlib.train_simple_object_detector('./real_minions.xml', self.output().path, options)
+        dlib.train_simple_object_detector(self.input()['train'].path, self.output().path, options)
 
-        print("Accuracy: {0}".format(dlib.test_simple_object_detector('./real_minions.xml', self.output().path)))
+        print("Accuracy: {0}".format(dlib.test_simple_object_detector(
+            self.input()['test'].path,
+            self.output().path
+        )))
      #+end_src
 
       #+name: card-detector:eval:dlib-detector:minion
@@ -1126,6 +1138,12 @@ for path in test_ims:
       could cause classification problems. Probably best to try to avoid it.
 
       Besides, it looks ugly.
+
+
+****** Post-Retrain
+
+       Retraining on more carefully taken data did not improve boxes. This
+       could be problematic. Will have to wait and see.
 
 **** Putting it Together
 
