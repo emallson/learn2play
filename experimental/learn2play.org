@@ -1237,7 +1237,7 @@ for img_path in args.images:
      SIFT does better: setting the match threshold to 30 consistently detects
      matching minions. Time to make proper Luigi tasks and make some plots.
 
-     | [[./figs/minion_a.jpg]] | [[./figs/minion_b.jpg]] |
+     | [[./figs/minion_a.jpg]] | [[./figs/minion_b.jpg]] | [[./figs/minion_a2.jpg]] | [[./figs/minion_b2.jpg]] | [[./figs/minion_a3.jpg]] | [[./figs/minion_b3.jpg]] |
 
 ** Random Utils
 *** OpenCV Key Printer
