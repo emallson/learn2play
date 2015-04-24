@@ -1174,6 +1174,71 @@ if __name__ == "__main__":
     luigi.run(local_scheduler=True)
      #+end_src
 
+
+*** +Card+ Minion Classification
+
+    Due to time constraints, I'm using my minion detector instead of a
+    hypothetical card detector.
+
+    Soooo lets try some features!
+
+**** SURF/SIFT
+
+     Not sure exactly how SURF features will work on this, but what the
+     hell. Let's try!
+
+     #+name: minion-classifier:test:surf
+     #+BEGIN_SRC python :tangle describe-minions.py
+from __future__ import print_function
+import cv2
+import dlib
+from skimage import io
+from learn2play.card_detector import DLIBDetector_Minion
+import argparse
+import itertools as it
+import numpy as np
+
+det = dlib.simple_object_detector(DLIBDetector_Minion().output().path)
+
+parser = argparse.ArgumentParser()
+parser.add_argument('images', nargs='*')
+
+args = parser.parse_args()
+
+sift = cv2.SIFT()
+flann = cv2.FlannBasedMatcher({"algorithm": 0, "trees": 5}, {"checks": 50})
+
+for img_path in args.images:
+    im = io.imread(img_path)
+    dets = det(im)
+
+    print(len(dets))
+
+    minions = [im[d.top():d.bottom(), d.left():d.right(), :]
+               for d in dets]
+    descriptors = [sift.detectAndCompute(m, None)[1] for m in minions]
+
+    matches = [((c[0][0], c[1][0]),
+               [(m, n) for (m, n) in flann.knnMatch(c[0][1], c[1][1], k=2)
+                if m.distance < 0.7 * n.distance])
+               for c in it.combinations(zip(minions, descriptors), 2)]
+
+    for m in matches:
+        print(len(m[1]))
+        if len(m[1]) > 30:
+            io.imsave('1.jpg', m[0][0])
+            io.imsave('2.jpg', m[0][1])
+     #+END_SRC
+
+     SURF sucks for this it seems. With low hessian threshold (for lots of keypoints),
+     very few keypoint matches occur. With a high hessian threshold, very few
+     matches occur.
+
+     SIFT does better: setting the match threshold to 30 consistently detects
+     matching minions. Time to make proper Luigi tasks and make some plots.
+
+     | [[./figs/minion_a.jpg]] | [[./figs/minion_b.jpg]] |
+
 ** Random Utils
 *** OpenCV Key Printer
 
