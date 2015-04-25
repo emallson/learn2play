@@ -1050,7 +1050,16 @@ for path in test_ims:
 
       #+name: card-detector:dlib-detector:minion
       #+begin_src python
+class FramesDataset(luigi.task.ExternalTask):
+    def output(self):
+        return {'train': luigi.LocalTarget('datasets/frames/train'),
+                'test': luigi.LocalTarget('datasets/frames/test'),
+                'unlabeled': luigi.LocalTarget('datasets/frames/unlabeled')}
+
 class MinionLabels(luigi.task.ExternalTask):
+
+    def requires(self):
+        return FramesDataset()
 
     def output(self):
         return {'train': luigi.LocalTarget('datasets/detector/minions/train.xml'),
@@ -1063,7 +1072,7 @@ class DLIBDetector_Minion(luigi.Task):
         if self.retrain:
             return False
         else:
-            return super(self, luigi.Task).complete()
+            return super(DLIBDetector_Minion, self).complete()
 
     def requires(self):
         return MinionLabels()
@@ -1239,6 +1248,285 @@ for img_path in args.images:
 
      | [[./figs/minion_a.jpg]] | [[./figs/minion_b.jpg]] | [[./figs/minion_a2.jpg]] | [[./figs/minion_b2.jpg]] | [[./figs/minion_a3.jpg]] | [[./figs/minion_b3.jpg]] |
 
+
+**** Extracting Cutouts
+
+     To effectively test classification, I need to remove detection from the
+     critical path. So: the plan is to extract cutouts from all of the images
+     in the frames dataset.
+
+     #+name: minion-classifier:task:cutouts
+     #+BEGIN_SRC python
+class MinionCutouts(luigi.Task):
+
+    def requires(self):
+        from card_detector import FramesDataset, DLIBDetector_Minion
+        from hearthstone_classifier import HearthstoneModel, TinyFeatures
+        return {'frames': FramesDataset(),
+                'detector': DLIBDetector_Minion(),
+                'model': HearthstoneModel(features=TinyFeatures)}
+
+    def output(self):
+        return luigi.LocalTarget('datasets/cutouts/minions')
+
+    def run(self):
+        import dlib
+        from skimage import io
+        from sklearn.externals import joblib
+        from scipy.misc import imresize
+        from glob import iglob
+        import itertools as it
+        from uuid import uuid4
+        import os
+
+        if not os.path.exists(self.output().path):
+            os.makedirs(self.output().path)
+
+        def chunk(iterable, n):
+            args = [iter(iterable)] * n
+            return it.izip_longest(fillvalue=None, *args)
+
+        def imgpath(p):
+            return os.path.join(p, '*.jpg')
+
+        detector = dlib.simple_object_detector(self.input()['detector'].path)
+        classifier = joblib.load(self.input()['model'].path)
+        paths = it.chain(iglob(imgpath(self.input()['frames']['test'].path)),
+                         iglob(imgpath(self.input()['frames']['train'].path)),
+                         iglob(imgpath(self.input()['frames']['unlabeled'].path)))
+
+        for ps in chunk(paths, 10):
+            ims = np.array(map(io.imread, filter(None, ps)))
+            bgrs = [imresize(im[:, :, ::-1], (16, 16)).reshape(-1) for im in ims]
+            predictions = np.array(classifier.predict(bgrs))
+            print(predictions)
+
+            good = ims[predictions == 1]
+            for im in good:
+                dets = detector(im)
+
+                for det in dets:
+                    cutout = im[det.top():det.bottom(), det.left():det.right(), :]
+                    name = os.path.join(self.output().path,
+                                        uuid4().get_hex() + '.jpg')
+                    io.imsave(name, cutout)
+
+     #+END_SRC
+
+     Total cutouts produced:
+
+     #+BEGIN_SRC sh :exports both
+ls -l datasets/cutouts/minions/*.jpg | wc -l
+     #+END_SRC
+
+     #+RESULTS:
+     : 4289
+
+**** Clustering Cutouts
+
+     The next step is to cluster them. Initial tests show that SIFT+FLANN did a
+     good job matching minions. Gonna re-use that to build the initial
+     clusters.
+
+     #+name: minion-classifier:task:cluster-base
+     #+BEGIN_SRC python
+class MinionClusters(luigi.Task):
+
+    def additionalDeps(self):
+        return []
+
+    def requires(self):
+        return [MinionCutouts()] + self.additionalDeps()
+
+    def output(self):
+        return luigi.LocalTarget('datasets/clusters/minions_{ident}'.format(ident=self.identifier()))
+
+    def run(self):
+        import cv2
+        import os
+        from shutil import copy
+        from skimage import io
+        from glob import glob
+
+        cutout_paths = glob(os.path.join(self.input()[0].path, '*.jpg'))
+        out_path = self.output().path
+
+        if not os.path.exists(out_path):
+            os.makedirs(out_path)
+
+        clusters = []
+
+        for path in cutout_paths:
+            matched = False
+            im = io.imread(path)
+            descriptor = self.describe(im)
+
+            # check for matching cluster
+            for idx, cluster in enumerate(clusters):
+                for key in cluster:
+                    if self.match(key, descriptor):
+                        copy(path, os.path.join(out_path, str(idx)))
+                        matched = True
+                        break
+                if matched:
+                    break
+
+            # no cluster matches
+            if not matched:
+                new_cluster_path = os.path.join(out_path, str(len(clusters)))
+                clusters.append([descriptor])
+                os.makedirs(new_cluster_path)
+                copy(path, new_cluster_path)
+     #+END_SRC
+
+     #+name: minion-classifier:task:sift-flann-cluster
+     #+BEGIN_SRC python
+class SIFT_FLANN_Cluster(MinionClusters):
+    threshold = luigi.IntParameter(default=30)
+
+    sift = cv2.SIFT()
+    flann = cv2.FlannBasedMatcher({"algorithm": 0, "trees": 5}, {"checks": 50})
+
+    def identifier(self):
+        return 'sift+flann_{threshold}'.format(threshold=self.threshold)
+
+    def describe(self, a):
+        return self.sift.detectAndCompute(a, None)[1]
+
+    def match(self, a, b):
+        matches = [(m, n) for (m, n) in self.flann.knnMatch(a, b, k=2)
+                   if m.distance < 0.7 * n.distance]
+        return len(matches) > self.threshold
+     #+END_SRC
+
+     #+name: minion-classifier:task:sift-hist-vocab
+     #+BEGIN_SRC python
+class MinionClusters_HistogramVocab(luigi.Task):
+
+    def requires(self):
+        return MinionCutouts()
+
+    def output(self):
+        return luigi.LocalTarget('training/vocab_minions_sift.npz')
+
+    def run(self):
+        import cv2
+        import os
+        from shutil import copy
+        from skimage import io
+        from glob import glob
+
+        cutout_paths = glob(os.path.join(self.input().path, '*.jpg'))
+
+        sift = cv2.SIFT()
+
+        ims = [io.imread(path) for path in cutout_paths]
+        descriptors = [sift.detectAndCompute(im, None)[1] for im in ims]
+        feats = np.vstack(descriptors)
+
+        compactness, labels, centers = cv2.kmeans(
+            feats, 100,
+            (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER,1000,1.0),
+            10, 0)
+
+        with self.output().open('w') as out:
+            np.savez_compressed(
+                out,
+                compactness=compactness,
+                labels=labels,
+                centers=centers
+            )
+     #+END_SRC
+
+     #+name: minion-classifier:task:sift-hist-cluster
+     #+BEGIN_SRC python
+class MinionClusters_Histogram(MinionClusters):
+    sift = cv2.SIFT()
+    threshold = luigi.IntParameter()
+
+    def __init__(self, *args, **kwargs):
+        super(MinionClusters_Histogram, self).__init__(*args, **kwargs)
+        self.centers = np.load(self.input()[1])['centers']
+
+    def additionalDeps(self):
+        return MinionClusters_HistogramVocab()
+
+    def identifier(self):
+        return 'sift_histogram'
+
+    def histogram(self, feat):
+        h = np.zeros((len(self.centers),), dtype='float32')
+        for f in feat:
+            dist = np.linalg.norm(centers - f, axis=1)
+            h[dist.argmax()] += 1
+        return h / np.linalg.norm(h)
+
+    def describe(self, a):
+        return self.sift.detectAndCompute(a, None)[1]
+
+    def match(self, a, b):
+        return np.linalg.norm(a - b) < self.threshold
+     #+END_SRC
+
+**** Visualizing the Clusters
+
+     #+BEGIN_SRC python :tangle utils/cluster_viz.py
+from glob import glob
+import os
+from matplotlib import pyplot as plt
+from matplotlib import gridspec
+
+cluster_roots = glob('datasets/clusters/minions/*')
+
+for root in cluster_roots:
+    print(root)
+    plt.figure()
+    gs = gridspec.GridSpec(3,3)
+    for i, path in enumerate(glob(os.path.join(root, '*.jpg'))[:9]):
+        ax = plt.subplot(gs[i])
+        ax.imshow(plt.imread(path))
+    plt.show()
+    plt.close()
+     #+END_SRC
+
+     Clusters look pretty solid. Looks like sometimes things get split into two
+     clusters (onyxia whelps?) gonna try matching against all within a cluster
+     to see if that helps the situation.
+
+     Sample clusters:
+
+     #+caption: Note the variety of highlights and effects.
+     [[file:./figs/clusters/3.png]]
+     #+caption: Note the invariance to the 'Frozen' effect.
+     [[file:./figs/clusters/50.png]]
+
+**** Putting it Together
+
+     #+name: minion-classifier:final
+     #+BEGIN_SRC python :tangle learn2play/minion_classifier.py :noweb yes :comments both
+import luigi
+import numpy as np
+import cv2
+
+
+<<minion-classifier:task:cutouts>>
+
+
+<<minion-classifier:task:cluster-base>>
+
+
+<<minion-classifier:task:sift-flann-cluster>>
+
+
+<<minion-classifier:task:sift-hist-vocab>>
+
+
+<<minion-classifier:task:sift-hist-cluster>>
+
+
+if __name__ == "__main__":
+    luigi.run(local_scheduler=True)
+     #+END_SRC
 ** Random Utils
 *** OpenCV Key Printer
 
