@@ -17,7 +17,7 @@
 
 #+macro: NL @@latex:\\@@
 
-#+title: Learning to Play Blizzard Entertainment's /Hearthstone/
+#+title: Learning to Play /Hearthstone/
 #+author: J David Smith {{{NL}}} University of Kentucky {{{NL}}} Lexington, KY, USA {{{NL}}} @@latex: {\tt\small emallson@cs.uky.edu}@@
 #+options: toc:nil
 
@@ -35,19 +35,6 @@
     computer vision research.
   \end{abstract}
 #+END_LaTeX
-* Progress                                                                                         :draftonly:
-  - Collected positive training data for a cascade classifier to detect
-    cards. Have method to collect negatives, just need to run.
-* Issues                                                                                           :draftonly:
-  - Time will be the biggest challenge I face. There are a lot of pieces to
-    this particular puzzle. I would be really happy if I managed to complete
-    the whole thing. However, I will be reasonably satisfied if I can
-    accurately annotate all of the information on a frame of Hearthstone.
-
-  - Reducing annotation time. This ties into the above. The naïve approach
-    would have me annotate everything as it is needed, but I'd like to find
-    better ways to accomplish the same thing without having to spend a lot of
-    time on manual annotation.
 
 * Introduction
   The ability to understand the world through images is one of the primary
@@ -105,15 +92,61 @@
 
 * Related Work
 
-  - Google Paper\cite{google-gaming}
-  - SURF Paper?
-  - Tiny Images Paper?
-  - Multi-Agent Markov Decision Processes Paper?
-  - Linear SVM?
-  - Cite OpenCV + Scikit-Learn?
-  - ...
+  There is relatively little work related to the specific problem of
+  interpreting the visuals of video games. Among the only ones I found is
+  the Mnih et al. paper from Google\cite{google-gaming}, which presents an
+  unsupervised method for learning to play classic video games.
+
+  However, this work makes significant use of methods for scene classification,
+  object detection and similarity matching. There has been significant progress
+  in recent years on these tasks, especially since the introduction of deep
+  learning into computer vision. For example, Zhou et
+  al.\cite{zhou2014learning} presented a state-of-the-art scene classification
+  result with 205 different classes running on the `Places'
+  database. Meanwhile, Krizhevsky et al.\cite{krizhevsky2012imagenet} presented
+  state-of-the-art results for object classification.
+
+  However, for this project my needs were simpler: binary scene classification,
+  fast object detection, and unbounded object classification (which is better
+  attacked as a similarity matching problem). Deep networks, of the kind used
+  by \cite{zhou2014learning} and \cite{krizhevsky2012imagenet} are powerful but
+  have uncertain performance in terms of time. In the past, Linear SVM has been
+  successfully used \cite{boutell2004learning}\cite{yang2007evaluating}. A
+  variety of fast descriptors also exists, including SIFT\cite{lowe1999object},
+  SURF\cite{bay2006surf} and Tiny Images\cite{torralba200880}.
+
+  The decision to use older methods was also motivated by time constraints on
+  the project: implementing the latest methods would take non-trivial amounts
+  of time. Older methods already have good, fast implementations.  For example:
+  scikit-learn\cite{scikit-learn} includes a fast and easy-to-use
+  implementation of SVM with a linear kernel, while OpenCV\cite{opencv_library}
+  has efficient implementations of SURF and SIFT. Additionally, dlib\cite{dlib09}
+  has an efficient and simple HOG-based cascade classifier.
 
 * Problem Statement
+
+  The objective of this paper is to demonstrate that video games are effective
+  `mini-worlds' which represent the intersection of many areas of computer
+  vision research. To demonstrate this proposition, three things are necessary:
+
+  1. It must be shown that a vision-based bot is feasible.
+  2. It must be shown that a bot is more demanding than any individual task,
+     but less demanding than the real world.
+  3. It must be shown that the evaluation of a bot can be derived naturally
+     from the game it plays.
+
+  To accomplish this, I seek to develop an effective vision-based bot for
+  /Hearthstone/. A bot is /effective/ if it can play the game at least well
+  enough to be mistaken for a human player. A bot is /vision-based/ if the only
+  inputs considered in its decisions are derived from visual information
+  presented by the game.
+
+  In this paper, I present the beginnings of such a bot. This would show that
+  such bots are feasible and, as will be seen throughout the rest of the paper,
+  that they incorporate a significant amount of vision research. Upon
+  completion of the bot, it could be shown trivially that evaluation comes
+  naturally from the task at hand.
+
 * Approach
 
   While deep-learning approaches are popular at present, I chose to construct
@@ -132,19 +165,19 @@
 ** Data Collection
 
    One of the largest streaming websites on the Internet is /Twitch.tv/. At the
-   time of writing, this website reported hundreds of 'channels' presently
+   time of writing, this website reported hundreds of `channels' presently
    online. Many of these channels have all or part of their streams stored
-   long-term for on-demand viewing.  I tapped this resource, collecting $X \geq 40$ GB
+   long-term for on-demand viewing.  I tapped this resource, collecting 40 GB
    of videos tagged as /Hearthstone/.
 
-   *Note:* Collection will likely continue, increasing the value of $X$.
-
-   It is important to note that this collection method has a problem: streamers
-   overlaying information onto their streams. Figures [[fig:hs_main_menu]] and
-   [[fig:streamer_sample]] show how /Hearthstone/'s main menu normally looks and
-   how it looks on a randomly chosen stream, respectively.  However, streamers
-   very rarely obscure important information, so it rarely poses more than a
-   generalization problem for classifiers.
+   The videos collected from Twitch are not perfect, however. Streamers may
+   miss-tag videos or overlay other information on top of them. Figures
+   [[fig:hs_main_menu]] and [[fig:streamer_sample]] show how /Hearthstone/'s main menu
+   normally looks and how it looks on a randomly chosen stream,
+   respectively. To tackle the miss-tagging problem, I train a SVM to determine
+   whether a frame is of /Hearthstone/ or not. The overlay problem ultimately
+   is one of generalization, and the SVM is shown to handle it well in section
+   [[Deciding if a Frame is of /Hearthstone/]].
 
    #+name: fig:hs_main_menu
    #+caption: The /Hearthstone/ main menu as it normally appears.
@@ -167,11 +200,10 @@
 
    1. Is this frame of a /Hearthstone/ game?
 
-      Sometimes videos are mis-labeled or streamers switch games without
+      Sometimes videos are miss-labeled or streamers switch games without
       changing what their stream is tagged as.
 
    2. What is each player's:
-      - Rank: Higher rank means more experienced player.
       - Class: There are 8 classes, each of which has access to a different set
         of extra cards
       - Mana & Maximum Mana: Mana is the resource players use to take
@@ -181,8 +213,8 @@
 
    3. What cards are in play, where, and who owns them?
 
-      Cards may exist in a player's hand, on the table, or as a weapon.  Some
-      cards also have effects that depend on location on the table.
+      Cards may exist in a player's hand, on the board, or as a weapon.  Some
+      cards also have effects that depend on location on the board.
 
    4. What effects and attributes does each card have?
 
@@ -192,52 +224,170 @@
       Health. Each card also has its own Health and Attack values, which may
       change as a result of other cards being played.
 
-   Annotation of (1) is done with a simple Linear SVM using $16\times 16$ Tiny
-   Images as features.
+*** Determining /Hearthstone/-ness
 
-   Annotations for (3) are generated by running a cascade classifier across the
-   image to detect /where/ the cards are.  The classifier is trained with a
-   positive set of 700 images of cards taken from an internet database of
-   /Hearthstone/ cards and a negative set of randomly sampled cutouts from the
-   images. Because the cards take up so little screen space (each card is only
-   fully displayed once or twice over the course of a game), the probability of
-   random sampling getting an entire card and nothing else is low. Further,
-   random sampling of the videos helps the classifier learn to ignore the
-   background. (*Note:* Not Yet Implemented)
+    This is the simplest piece of the project. I extracted SURF and Tiny Images
+    features from frames of randomly chosen, manually annotated videos. I
+    trained an SVM with a linear kernel using
+    scikit-learn\cite{scikit-learn}. Evaluation is in section [[Deciding if a
+    Frame is of /Hearthstone/]]. The Tiny Images features were chosen as their
+    all-around performance was significantly higher than SURF.
 
-   The detections from the cascade classifier are used to extract regions from
-   the images corresponding to cards. These are distinguished with $X$.
+*** Extracting Metadata
 
-   Annotation of (2) is accomplished by running detectors for each across the
-   frame. (?)
+    I did not have the opportunity to complete this part of the
+    project. However, my initial experiments indicate that combining dlib's
+    cascade classifier (which performed quite well at extracting minions) with
+    an OCR tool like Tesseract\cite{tesseract} will give high-quality results.
 
-   *Note:* Descriptions of annotation methods are super vague now because I've
-   not done them yet.
+*** Detecting Cards in Play
+
+    There are two distinct sets of cards that are in play at any given time:
+    cards in a player's hand, and cards (more specifically: /minions/) on the
+    board.
+
+    I trained a cascade classifier using dlib to detect minions. I manually
+    annotated 40 frames of /Hearthstone/, then took 30 for a training set and
+    left 10 for a test set. Evaluation is in section [[Detecting Minions]].
+
+    #+caption: Visualization of the HOG detector learned by dlib.
+    #+ATTR_LATEX: :width 0.5\linewidth
+    [[./figs/minion-detection-hog.png]]
+
+    I did not have the opportunity to train a detector for cards in the
+    player's hand. I initially attempted to do so using a collection of card
+    images downloaded from the /Hearthstone/ sub-reddit. However, this detector
+    performed extremely poorly. I believe the cause of the poor performance is
+    that the `synthetic' data (the card images) lacked the context which the
+    image frames provided. However, the excellent performance of detection of
+    minions gives me confidence that applying this same method would result in
+    good results.
+
+*** Distinguishing Cards
+
+    One might be tempted to phrase the problem of distinguishing cards as
+    multi-class classification, to be done in a one-vs-all fashion with a
+    collection of SVMs. However, that approach has several issues:
+
+    1. There are more than 500 kinds of cards. This results in 500 classes to
+       be tested on. By itself this is not a significant problem, but given
+       that my data is largely unlabeled an approach that doesn't require
+       labeling hundreds of frame cutouts would be ideal. I am not confident
+       that basing a classifier on data collected from a fan-site would have
+       good performance, given the poor performance of my initial dlib card
+       detector.
+    2. More cards are added with a reasonable frequency. Over the past year, 3
+       new sets of cards (1 expansion pack and 2 player-vs-computer challenges
+       which reward cards) have been introduced. The ideal situation would be
+       to be able to distinguish these new cards from existing cards, something
+       which a normal multi-class classification approach does not handle.
+
+    Therefore, I approach this problem instead as one of /similarity matching/
+    and /clustering/. I began by extracting detected minions from a subset of
+    /Hearthstone/ frames. Then, I ran several experiments on different ways of
+    matching cards. A qualitative evaluation of these methods is given in
+    section [[Qualitative Evaluation of Minion Similarity Matching]].
+
+**** SURF + FLANN
+
+     My initial test used SURF descriptors with FLANN\cite{muja2009fast}
+     matching, both of which are easy to compute with OpenCV. However, no
+     matter what parameters I tried I could never get a sufficient number of
+     matches for any method (manual or otherwise) to use for clustering.
+
+**** SIFT + FLANN
+
+     I next tried SIFT with FLANN matching. I expected equally poor results,
+     but was pleasantly surprised when not only did the method produce a
+     /significantly/ higher number of matching points (a full 10x increase),
+     but it also proved to work well for clustering. I used this method to
+     cluster the minion cutouts in 2 ways.
+
+     First, I manually assigned a threshold of 30 matching points. This
+     threshold was chosen based on observations of the number of matching
+     points between two instances of the same minion. If two minions $A$ and
+     $B$ had greater than 30 matching points, they were considered to be the
+     same and grouped together. The first example for each cluster was used as
+     the exemplar for the cluster, against which future instances were
+     compared. This produced surprisingly good results.
+
+     I next tried using Frey & Dueck's Affinity Propagation clustering
+     algorithm\cite{frey2007clustering}. This algorithm was chosen because it
+     learns the number of clusters along the way, and it allows a flexible
+     definition of similarity. Given $n = 4289$ minion cutouts, I constructed
+     an $n\times n$ similarity matrix with similarity defined as 'number of matching
+     points'.
+
+     The manual method had split a few minions into multiple clusters. Each of
+     these clusters appeared to be consistently occluded. The affinity
+     propagation method did not do this, but occasionally grouped a minion with
+     an incorrect class.
+
+**** SIFT Bag of Visual Words
+
+     Following SIFT + FLANN, I attempted to cluster the minions using a Bag of
+     Visual Words based on SIFT descriptors with Euclidean distance as the
+     similarity metric. A vocabulary was constructed by taking SIFT descriptors
+     of 1500 cutouts and clustering them with k-means into 100 clusters. Then,
+     I clustered the cutouts using Affinity Propagation. However, this method
+     produced results which were seemingly random.
+
+*** Detecting Effects & Attributes
+
+    I did not have the opportunity to complete this part of the project. It
+    could be accomplished in a similar method as in [[Extracting Metadata]].
+    Effects are naturally classification problems, while attributes are numbers
+    which require detection, localization and then OCR.
 
 ** Play Prediction
 
-   /Hearthstone/ is an adversarial 2-agent stochastic game, so I'm going to use
-   a multi-agent Markov Decision Process to represent it.
+   I did not have the opportunity to experiment on predicting the actions the
+   bot should take. However, I made significant progress on building a
+   description of frames so that an algorithm would -- in theory -- be able to
+   do so.
+
+   I believe that phrasing this portion of the project as a multi-agent
+   stochastic game would allow me to take advantage of the significant body of
+   research on multi-agent Markov decision processes to learn to
+   play. /Hearthstone/ is naturally a stochastic game because many of its
+   elements (such as drawing cards) are random in nature.
 
 ** Input Prediction
 
-   This is predicting the input to perform in order to transition from the
-   present state to the desired one as predicted by [[Play Prediction]].
+   The final piece for an actual working bot is the ability to make inputs to
+   the game in order to act on the predictions made by the component described
+   in section [[Play Prediction]]. However, I did not have the opportunity to
+   develop this piece.
+
+   In practice, many bots have hard-coded methods for generating
+   input. However, these are complex to develop and prone to breaking on edge
+   cases. I believe that it is possible to apply learning-based methods for
+   this task rather than developing input generation by hand.
+
+   Since /Hearthstone/ is a mouse-driven game, the general plan for
+   implementing this would be to take a representation of mouse clicks and
+   drags in association with state information given by the above to learn how
+   to input maps to state transitions.
 
 * Evaluation
 
-  *Note:* Not sure if each individual kind of annotation should have its own
-   bit of evaluation. For the moment, the only one that's done is the
-   /Hearthstone/ or not classifier, so it is presented here.
+  I quantitatively evaluate the methods described for determining if a frame is
+  of /Hearthstone/ and for detecting minions. Due to a lack of labeled data, I
+  did not quantitatively evaluate the method for distinguishing minions. I also
+  qualitatively evaluated all three methods.
 
 ** Deciding if a Frame is of /Hearthstone/
 
-   I tried using SURF features with a Bag of Visual Words because I expected
-   the streamer overlays to cause some problems. I was disappointed with the
-   performance (see figure [[fig:surf_hs?]]).  I then tried Tiny Images, and they
-   performed so damn well that I don't feel the need to try anything else
-   (figure [[fig:tiny_hs?]]).  The ROC curve looks suspicious because of how good
-   it is, but the random samples of videos I've run it on look legitimate.
+   I labeled 16 videos of /Hearthstone/, assigning each frame in the video
+   either a 1 or -1 for /Hearthstone/ or /Not Hearthstone/, respectively. I
+   trained on 50% of the videos and tested on 50%. The performance of each
+   method is summarized as an ROC curve.
+
+   Bag of Visual Words with Upright-SURF did not perform as well as expected,
+   having an AUC of only 84.7%. $16\times 16$ Tiny Images performed significantly better than
+   expected, achieving 99.7% accuracy on the same task. I hypothesize that this
+   is because the /Hearthstone/ window is typically stationary in a consistent
+   position.
 
    #+name: fig:surf_hs?
    #+caption: Linear SVM + SURF Histogram performance on frame type classification
@@ -246,19 +396,155 @@
    #+name: fig:tiny_hs?
    #+caption: Linear SVM + $16\times 16$ Tiny Images performance on frame type classification
    [[file:../experimental/plots/roc_100_hearthstone_model_tiny_16x16.png]]
+
+   Because Tiny Images had such high performance, I felt the need to do an
+   extensive qualitative evaluation to insure there were not bugs in my
+   evaluation. I watched 5 unlabeled videos and looked for incorrect
+   predictions. I did not notice any. Examples are in figure \ref{fig:tiny-positive}.
+
+   Note the last example (row 2, column 3): the frame has /Hearthstone/ in the
+   background, but has more than half of the screen occluded. I count this as a
+   true negative, because the state information recovered from this frame would
+   be incomplete and likely incorrect.
+
+   #+BEGIN_LaTeX
+     \begin{figure*}
+       \centering
+       \begin{minipage}{.33\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/hsp/a.jpg}
+       \end{minipage}
+       \begin{minipage}{.33\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/hsp/b.jpg}
+       \end{minipage}
+       \begin{minipage}{.33\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/hsp/c.jpg}
+       \end{minipage}
+       \begin{minipage}{.33\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/hsp/neg_a.jpg}
+       \end{minipage}
+       \begin{minipage}{.33\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/hsp/neg_b.jpg}
+       \end{minipage}
+       \begin{minipage}{.33\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/hsp/neg_c.jpg}
+       \end{minipage}
+       \caption{Frames Correctly labeled as \textit{Hearthstone} (row 1) or \textit{Not Hearthstone} (row 2) by Tiny Images + Linear SVM}
+       \label{fig:tiny-positive}
+     \end{figure*}
+   #+END_LaTeX
+
+** Detecting Minions
+
+   I labeled 40 frames positively identified as /Hearthstone/ by Tiny Images +
+   Linear SVM. I trained a HOG-based cascade classifier using dlib on 30 of
+   these frames, and tested it on 10. I evaluated it by comparing the pixels
+   labeled as 'minion' by dlib versus the true values. This method achieves a
+   pixel-labeling accuracy of 0.92 (see figure
+   \ref{fig:dlib-pixel-accuracy}). Sample cutouts are displayed in figure
+   \ref{fig:minion-sample}.
+
+   #+name: fig:dlib-pixel-accuracy
+   #+caption: Precision-Recall curve of pixel-labeling accuracy of the DLIB Cascade Classifier
+   [[./figs/dlib_prec_rec.png]]
+
+   #+BEGIN_LaTeX
+     \begin{figure*}
+       \centering
+       \begin{minipage}{.19\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/minions/13.jpg}
+       \end{minipage}
+       \begin{minipage}{.19\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/minions/20.jpg}
+       \end{minipage}
+       \begin{minipage}{.19\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/minions/57.jpg}
+       \end{minipage}
+       \begin{minipage}{.19\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/minions/68.jpg}
+       \end{minipage}
+       \begin{minipage}{.19\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/minions/76.jpg}
+       \end{minipage}
+       \begin{minipage}{.19\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/minions/b0.jpg}
+       \end{minipage}
+       \begin{minipage}{.19\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/minions/d5.jpg}
+       \end{minipage}
+       \begin{minipage}{.19\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/minions/ef.jpg}
+       \end{minipage}
+       \begin{minipage}{.19\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/minions/f3.jpg}
+       \end{minipage}
+       \begin{minipage}{.19\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/minions/fb.jpg}
+       \end{minipage}
+       \caption{Minions extracted from \textit{Hearthstone} frames by the DLIB HOG-based cascade classifier}
+       \label{fig:minion-sample}
+     \end{figure*}
+   #+END_LaTeX
+
+** Qualitative Evaluation of Minion Similarity Matching
+
+   Since I do not have ground truth labels for minion clustering, I conducted
+   only a qualitative evaluation of the results.
+
+*** SIFT+FLANN with a Manual Threshold
+
+    This clustering seemed to perform the best of the methods I tried. While in
+    terms of raw performance it seems tied with SIFT + FLANN with Affinity
+    Propagation, this method is biased towards exclusion (when unsure, split
+    the cluster) while Affinity Propagation is biased towards inclusion (when
+    unsure, leave the cluster alone). Examples of clusters found with this
+    method are in figure \ref{fig:clusters-manual}.
+
+*** SIFT+FLANN with Affinity Propagation
+
+    While this method occasionally incorrectly identifies minions, my
+    qualitative analysis shows that it does remarkably well. Example clusters
+    are shown in figure \ref{fig:clusters-siftflann-ap}.
+
+*** Bag of Visual Words (SIFT) with Affinity Propagation
+
+    This method performed very poorly, with only 5 cluster centers chosen when
+    tested on 800 cutouts. Because of prohibitive computation time, it was not
+    tested on the full 4289 cutouts. An example of one of these clusters is in
+    figure \ref{fig:cluster-bovw}.
+
 * Applications
+  While the thrust of this paper has been towards demonstrating that video
+  games provide viable mini-worlds, there are direct applications of the work
+  presented.
+
 ** Building Better In-Game Bots
    Currently, /Hearthstone/ has some bots to practice against. However, their most
    advanced ones are pretty trivial to win against. A better bot could provide a
    more advanced option for testing new strategies against strategies learned by
    watching real players.
 ** Outlier Detection
-   By looking at the learned transition function (see [[Play Prediction]]), it may
-   be possible to better identify cards and card combinations which are more
-   powerful than desired (outliers). While the Hearthstone developers already
-   have access to information on how people are playing the game, watching a
-   bot play from contrived scenarios may give further insight into why players
-   play the way they do.
+   By looking at the learned transition function (see section [[Play Prediction]]),
+   it may be possible to better identify cards and card combinations which are
+   more powerful than desired (outliers). While the Hearthstone developers
+   already have access to information on how people are playing the game,
+   watching a bot play from contrived scenarios may give further insight into
+   why players play the way they do.
 ** Outsider Statistics
    Third-party sites are ever-popular for online games. Many games (including
    /Hearthstone/) have third-parties interested in keeping and displaying
@@ -267,17 +553,107 @@
    could provide this information by watching streams and providing annotations
    to these third parties.
 * Discussion
-  Something something this shows that bots are feasible something something
-  this shows that they provide good metrics for the efficacy of computer vision
-  methods something something.
+  In this work, I have shown that it is feasible to build bots that learn play
+  a game by looking at the visual information that is presented to the
+  player. While the tools I used were not state of the art, I still
+  demonstrated excellent performance at the task of understanding the game's
+  visual information. This particular game is relatively simple by modern
+  standards; more complex games would require more effort to get similar
+  performance.
 
-  It may also be possible to read annotations directly from a game's memory or
-  connection information. Blizzard has countermeasures against this and bans
-  accounts for doing so. However, for academic research they and other
-  developers may be willing to cooperate and provide easily-accessible
-  machine-readable annotations.
+  The proposal that video games fill an evaluation role in-between performance
+  on a single task and performance on interacting with the entire world is
+  supported by this. While I did not reach to the point that I could give
+  performance results of a complete /Hearthstone/-playing system, I did show
+  that this is a reasonable goal.
 
-  \textit{Special thanks to Connor Greenwell.}
+  Evaluating performance on /Hearthstone/ would be natural: what is the bot's
+  win/loss rate over a few hundred games? This represents the bots capability
+  when playing against a human opponent. A value of $1$ would imply that the
+  bot is approximately as good as a human, while higher values would indicate
+  that the bot is better than human.
+
+  Similar natural evaluation methods exist for more complicated games, such as
+  /League of Legends/, /DotA 2/ and /Counter Strike/. Such evaluations would
+  perform the role of 'system tests' in computer vision. We know that it is
+  possible to accurately perform many tasks independently, but how well can we
+  do when performing several under time constraints? Further: how do the errors
+  of various algorithms interact? How do the errors matter, and how can they be
+  reduced? These questions will appear when building robots that interact with
+  the natural world. Investigating them could open up interesting new avenues
+  of research within computer vision.
+
+  Much of my time on this project was spent on building annotations, and it
+  suffered from lack of labeled data. While many game companies (including
+  /Blizzard Entertainment/) have countermeasures to prevent users from reading
+  a game's memory or connection information, they may be willing to provide
+  academics with tools to build annotated datasets. Regardless of cooperation,
+  for many games it is still possible to build such datasets. This could
+  provide academics with a wealth of information on which to test.
+
+  I have shown that it is feasible to build effective vision-based bots to play
+  video games, and that doing so would provide meaningful information about the
+  performance of computer vision algorithms. I have shown that the video game
+  data available is sufficient for such a bot, and briefly described how the
+  problem of obtaining annotations could be side-stepped. Finally, I have
+  discussed how the study of vision-based bots can offer answers to several
+  research questions which will have application towards one of the goals of
+  computer vision: building systems that can understand and interact with the
+  world through imagery.
+
+  /Source code available at [[https://github.com/emallson/learn2play]]/
+
+  /Special thanks to Connor Greenwell./
+
+
+  #+BEGIN_LaTeX
+    \begin{figure*}[h]
+      \centering
+      \begin{minipage}{.9\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{./figs/clusters_manual/50_small.png}
+      \end{minipage}
+      \begin{minipage}{.45\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{./figs/clusters_manual/3.png}
+      \end{minipage}
+      \begin{minipage}{.45\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{./figs/clusters_manual/1.png}
+      \end{minipage}
+      \caption{Clusters identified by manual threshold with SIFT+FLANN}
+      \label{fig:clusters-manual}
+    \end{figure*}
+  #+END_LaTeX
+
+  #+BEGIN_LaTeX
+    \begin{figure*}[h]
+      \centering
+      \begin{minipage}{.9\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{./figs/clusters_sift_ap/16.png}
+      \end{minipage}
+      \begin{minipage}{.45\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{./figs/clusters_sift_ap/100.png}
+      \end{minipage}
+      \begin{minipage}{.45\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{./figs/clusters_sift_ap/103.png}
+      \end{minipage}
+      \caption{Clusters identified by Affinity Propagation with SIFT+FLANN}
+      \label{fig:clusters-siftflann-ap}
+    \end{figure*}
+  #+END_LaTeX
+
+  #+BEGIN_LaTeX
+    \begin{figure*}[h]
+    \centering
+    \includegraphics[width=0.8\textwidth]{./figs/clusters_bovw_sift/1.png}
+    \caption{A cluster chosen using Affinity Propagation with a Bag of Visual Words build using SIFT descriptors.}
+    \label{fig:cluster-bovw}
+    \end{figure*}
+  #+END_LaTeX
 
 \bibliography{l2p_hs}{}
 \bibliographystyle{ieee}

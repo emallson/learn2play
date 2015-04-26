@@ -1154,6 +1154,90 @@ for path in test_ims:
        Retraining on more carefully taken data did not improve boxes. This
        could be problematic. Will have to wait and see.
 
+***** Secondary Evaluation
+
+      #+BEGIN_SRC python :tangle utils/eval-dlib.py
+import dlib
+from sklearn.metrics import precision_recall_curve, average_precision_score
+from skimage import io
+import os
+from lxml import etree
+import numpy as np
+from matplotlib import pyplot as plt
+
+detector = dlib.simple_object_detector('training/minion-detector.svm')
+
+with open('datasets/detector/minions/test.xml') as f:
+    root = etree.fromstring(f.read())
+
+imgs = root.xpath('/dataset/images/image')
+
+def box2box(box):
+    return {
+        'top': int(box.attrib['top']),
+        'bottom': int(box.attrib['top']) + int(box.attrib['height']),
+        'left': int(box.attrib['left']),
+        'right': int(box.attrib['left']) + int(box.attrib['width'])
+    }
+
+def det2box(det):
+    return {
+        'top': det.top(),
+        'bottom': det.bottom(),
+        'left': det.left(),
+        'right': det.right()
+    }
+
+def intersection(a, b):
+    i = {
+        'top': max(a['top'], b['top']),
+        'bottom': min(a['bottom'], b['bottom']),
+        'left': max(a['left'], b['left']),
+        'right': min(a['right'], b['right'])
+    }
+
+    return i
+
+def area(a):
+    return (a['bottom'] - a['top']) * (a['right'] - a['left'])
+
+def onto_map(m, box):
+    m[box['top']:box['bottom'], box['left']:box['right']] = 1
+    return m
+
+labels = []
+reals = []
+
+for img in imgs:
+    im = io.imread(img.attrib['file'])
+    dets = map(det2box, detector(im))
+    real = map(box2box, img.xpath('box'))
+
+    detmap = np.zeros(im.shape[:2])
+    realmap = np.zeros(im.shape[:2])
+
+    detmap = reduce(onto_map, dets, detmap)
+    realmap = reduce(onto_map, real, realmap)
+
+    labels.append(detmap.reshape(-1))
+    reals.append(realmap.reshape(-1))
+
+labels = np.concatenate(labels)
+reals = np.concatenate(reals)
+
+precision, recall, thresholds = precision_recall_curve(reals, labels)
+
+plt.figure(figsize=(8,5), dpi=80)
+plt.plot(recall, precision)
+plt.xlabel("Recall")
+plt.ylabel("Precision")
+plt.ylim([0, 1.05])
+plt.xlim([0, 1])
+plt.title("Pixel-Labeling Accuracy (DLIB Minion Detector). AUC: {0:0.2f}".format(
+    average_precision_score(reals, labels)
+))
+plt.savefig('test.png')
+      #+END_SRC
 **** Putting it Together
 
      #+begin_src python :tangle learn2play/card_detector.py :comments both :noweb yes
@@ -1182,7 +1266,6 @@ from glob import glob, iglob
 if __name__ == "__main__":
     luigi.run(local_scheduler=True)
      #+end_src
-
 
 *** +Card+ Minion Classification
 
@@ -1415,8 +1498,11 @@ class MinionClusters_HistogramVocab(luigi.Task):
         from shutil import copy
         from skimage import io
         from glob import glob
+        from random import shuffle
 
         cutout_paths = glob(os.path.join(self.input().path, '*.jpg'))
+        shuffle(cutout_paths)
+        cutout_paths = cutout_paths[:1000]
 
         sift = cv2.SIFT()
 
@@ -1442,27 +1528,21 @@ class MinionClusters_HistogramVocab(luigi.Task):
      #+BEGIN_SRC python
 class MinionClusters_Histogram(MinionClusters):
     sift = cv2.SIFT()
-    threshold = luigi.IntParameter()
+    threshold = luigi.FloatParameter()
 
     def __init__(self, *args, **kwargs):
         super(MinionClusters_Histogram, self).__init__(*args, **kwargs)
-        self.centers = np.load(self.input()[1])['centers']
+        with self.input()[1].open('r') as f:
+            self.centers = np.load(f)['centers']
 
     def additionalDeps(self):
-        return MinionClusters_HistogramVocab()
+        return [MinionClusters_HistogramVocab()]
 
     def identifier(self):
         return 'sift_histogram'
 
-    def histogram(self, feat):
-        h = np.zeros((len(self.centers),), dtype='float32')
-        for f in feat:
-            dist = np.linalg.norm(centers - f, axis=1)
-            h[dist.argmax()] += 1
-        return h / np.linalg.norm(h)
-
     def describe(self, a):
-        return self.sift.detectAndCompute(a, None)[1]
+        return self.histogram(self.sift.detectAndCompute(a, None)[1])
 
     def match(self, a, b):
         return np.linalg.norm(a - b) < self.threshold
@@ -1475,8 +1555,9 @@ from glob import glob
 import os
 from matplotlib import pyplot as plt
 from matplotlib import gridspec
+import sys
 
-cluster_roots = glob('datasets/clusters/minions/*')
+cluster_roots = sys.argv[1:]
 
 for root in cluster_roots:
     print(root)
@@ -1500,6 +1581,215 @@ for root in cluster_roots:
      #+caption: Note the invariance to the 'Frozen' effect.
      [[file:./figs/clusters/50.png]]
 
+**** Affinity Propagation
+
+     Affinity Propagation is a clustering algorithm that uses a similarity
+     matrix to try and learn clusters. It has a reasonably simple-to-use
+     implementation in scikit-learn.
+
+     First, I am going to need similarity matrices for various kinds of
+     metrics.
+
+     #+name: minion-classifier:task:similarity-matrix
+     #+BEGIN_SRC python
+class SimilarityMatrix(luigi.Task):
+    metric = TaskParameter()
+    limit = luigi.IntParameter(default=None)
+
+    def __init__(self, *args, **kwargs):
+        super(SimilarityMatrix, self).__init__(*args, **kwargs)
+
+        self.Metric = self.metric()
+
+    def requires(self):
+        return MinionCutouts(), self.metric()
+
+    def output(self):
+        return luigi.LocalTarget('datasets/similarity/{identifier}.npz'.format(
+            identifier=self.Metric.identifier()
+        ))
+
+    def run(self):
+        from glob import glob
+        from skimage import io
+        import itertools as it
+
+        cutout_paths = glob(os.path.join(self.input()[0].path, '*.jpg'))[:self.limit]
+        def images():
+            for path in cutout_paths:
+                yield io.imread(path)
+
+        descriptions = map(self.Metric.describe, images())
+        similarity = np.zeros((len(descriptions), len(descriptions)))
+        for ((ia, da), (ib, db)) in it.combinations(enumerate(descriptions), 2):
+             similarity[ia, ib] = similarity[ib, ia] = self.Metric.similarity(da, db)
+
+        with self.output().open('w') as out:
+            np.savez_compressed(
+                out,
+                similarity=similarity
+            )
+
+import abc
+class Metric(luigi.Task):
+    __metaclass__ = abc.ABCMeta
+
+    def complete(self):
+        return True
+
+    def run(self):
+        pass
+
+    @abc.abstractmethod
+    def identifier(self):
+        "Produces a string identifying the kind of metric"
+        pass
+
+    @abc.abstractmethod
+    def describe(self, a):
+        "Describes a datum. This description is cached for re-use."
+        pass
+
+    @abc.abstractmethod
+    def similarity(self, da, db):
+        "Computes the similarity between two data."
+        pass
+     #+END_SRC
+
+     #+name: minion-classifier:metric:flann-matches
+     #+BEGIN_SRC python
+class Sift_Flann_Metric(Metric):
+    sift = cv2.SIFT()
+    flann = cv2.FlannBasedMatcher({'algorithm': 0,
+                                   'trees': 5},
+                                  {'checks': 50})
+
+    def requires(self):
+        return MinionClusters_HistogramVocab()
+
+    def identifier(self):
+        return 'sift+flann'
+
+    def describe(self, a):
+        return self.sift.detectAndCompute(a, None)[1]
+
+    def similarity(self, da, db):
+        matches = [True for (m, n) in self.flann.knnMatch(da, db, k=2)
+                   if m.distance < 0.7 * n.distance]
+        return len(matches)
+     #+END_SRC
+
+     #+name: minion-classifier:metric:sift-hist
+     #+BEGIN_SRC python
+class Sift_Hist_Metric(Metric):
+    sift = cv2.SIFT()
+
+    def __init__(self, *args, **kwargs):
+        super(Sift_Hist_Metric, self).__init__(*args, **kwargs)
+        # this is bullshit; solve later
+        with self.input().open('r') as f:
+            self.centers = np.load(f)['centers']
+
+    def requires(self):
+        return MinionClusters_HistogramVocab()
+
+    def identifier(self):
+        return 'sift_hist'
+
+    def histogram(self, feat):
+        h = np.zeros((len(self.centers),), dtype='float32')
+        for f in feat:
+            dist = np.linalg.norm(self.centers - f, axis=1)
+            h[dist.argmax()] += 1
+        return h / np.linalg.norm(h)
+
+    def describe(self, a):
+        return self.histogram(self.sift.detectAndCompute(a, None)[1])
+
+    def similarity(self, da, db):
+        return np.linalg.norm(da - db)
+
+     #+END_SRC
+
+     Now to attempt to learn the clustering.
+
+     #+name: minion-classifier:cluster:affinity
+     #+BEGIN_SRC python
+class AffinityPropagationCluster(luigi.Task):
+    metric = TaskParameter()
+
+    def requires(self):
+        return SimilarityMatrix(metric=self.metric)
+
+    def output(self):
+        return luigi.LocalTarget('training/clusters/affinity_{ident}.jl'.format(
+            ident=self.metric().identifier()
+        ))
+
+    def run(self):
+        from sklearn.cluster import AffinityPropagation
+        from sklearn.externals import joblib
+
+        with self.input().open('r') as f:
+            similarity = np.load(f)['similarity']
+
+        ap = AffinityPropagation(affinity='precomputed')
+        ap.fit(similarity)
+
+        joblib.dump(ap, self.output().path)
+     #+END_SRC
+
+     And then to apply it.
+
+     #+name: minion-classifier:cluster:apply
+     #+BEGIN_SRC python
+class ApplyCluster(luigi.Task):
+    cluster_type = TaskParameter()
+    metric = TaskParameter()
+
+    def requires(self):
+        return MinionCutouts(), self.cluster_type(metric=self.metric)
+
+    def output(self):
+        return luigi.LocalTarget('datasets/clusters/{cls}_{ident}/'.format(
+            cls=self.cluster_type.__name__,
+            ident=self.metric().identifier()
+        ))
+
+    def run(self):
+        from sklearn.externals import joblib
+        from skimage import io
+        from glob import glob
+        from itertools import product
+        from shutil import copy
+
+        def label_path(label):
+            return os.path.join(self.output().path, str(label))
+
+        def ensure(label):
+            if not os.path.exists(label_path(label)):
+                os.makedirs(label_path(label))
+
+        cl = joblib.load(self.input()[1].path)
+        metric = self.metric()
+
+        cutout_paths = glob(os.path.join(self.input()[0].path, '*.jpg'))[:800]
+        ims = [io.imread(p) for p in cutout_paths]
+        descs = np.array([metric.describe(im) for im in ims])
+
+        centers = descs[cl.cluster_centers_indices_]
+
+        similarities = np.zeros((len(descs), len(centers)))
+        for ((di, d), (ci, c)) in product(enumerate(descs), enumerate(centers)):
+            similarities[di, ci] = metric.similarity(d, c)
+
+        labels = np.argmax(similarities, axis=1)
+
+        for (label, path) in zip(labels, cutout_paths):
+            ensure(label)
+            copy(path, label_path(label))
+     #+END_SRC
+
 **** Putting it Together
 
      #+name: minion-classifier:final
@@ -1507,6 +1797,8 @@ for root in cluster_roots:
 import luigi
 import numpy as np
 import cv2
+import os
+from hearthstone_classifier import TaskParameter
 
 
 <<minion-classifier:task:cutouts>>
@@ -1522,6 +1814,21 @@ import cv2
 
 
 <<minion-classifier:task:sift-hist-cluster>>
+
+
+<<minion-classifier:task:similarity-matrix>>
+
+
+<<minion-classifier:metric:flann-matches>>
+
+
+<<minion-classifier:metric:sift-hist>>
+
+
+<<minion-classifier:cluster:affinity>>
+
+
+<<minion-classifier:cluster:apply>>
 
 
 if __name__ == "__main__":
