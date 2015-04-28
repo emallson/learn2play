@@ -1331,7 +1331,6 @@ for img_path in args.images:
 
      | [[./figs/minion_a.jpg]] | [[./figs/minion_b.jpg]] | [[./figs/minion_a2.jpg]] | [[./figs/minion_b2.jpg]] | [[./figs/minion_a3.jpg]] | [[./figs/minion_b3.jpg]] |
 
-
 **** Extracting Cutouts
 
      To effectively test classification, I need to remove detection from the

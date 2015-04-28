@@ -1,0 +1,236 @@
+#+title: Learning to Play /Hearthstone/
+#+author: J David Smith
+#+date: <2015-04-30 Thu>
+#+options: num:nil toc:nil H:2
+#+startup: beamer
+#+latex_class: beamer
+
+#+latex_header: \usetheme{Berkeley}
+#+latex_header: \usecolortheme{dove}
+#+latex_header: \usepackage[labelformat=empty]{caption}
+#+latex_header: \setbeamertemplate{navigation symbols}{}
+
+* Introduction
+** A Computer Vision Goal
+   #+caption: Understand & interact with this scene
+   [[./figs/busy-street-nyc-2010.jpg]]
+** A Step Back
+   #+caption: Understand & interact with this scene
+   [[./figs/hearthstone_sample.jpg]]
+** Which is Easier?
+*** The World                                                         :BMCOL:
+    :PROPERTIES:
+    :BEAMER_col: 0.49
+    :END:
+
+    [[./figs/busy-street-nyc-2010.jpg]]
+*** /Hearthstone/                                                     :BMCOL:
+    :PROPERTIES:
+    :BEAMER_col: 0.49
+    :END:
+
+    [[./figs/hearthstone_sample.jpg]]
+* Motivation
+** Motivation
+
+   - Understanding the entire world is hard
+   - Doing so well enough to reliably & safely interact with it is harder
+   - Simplify the problem to make it tractable
+
+* Challenges
+** Challenges in Understanding Video Games
+
+   - Understanding
+     + Scene Classification
+     + Object Detection, Classification & Tracking
+     + Action Recognition
+   - Interaction
+     + Cause & Effect
+     + Sending input
+
+** Specific Challenges
+
+   - Frame Classification
+     + /Is this frame Hearthstone?/
+   - Object Detection under Occlusion
+     + /Where are the cards?/
+   - $n$-Class Classification, for Large Unbounded $n$
+     + /Which card is this?/
+
+* Approach
+** Frame Classification
+*** Bag of Visual Words with SURF                                     :BMCOL:
+    :PROPERTIES:
+    :BEAMER_col: 0.49
+    :END:
+    #+caption: Features: SURF BoVW
+    [[file:../experimental/plots/roc_1000_hearthstone_model_surf_hist_upright_5000.png]]
+*** Tiny Images                                                       :BMCOL:
+    :PROPERTIES:
+    :BEAMER_col: 0.49
+    :END:
+    #+caption: Features: Tiny Images
+    [[file:../experimental/plots/roc_100_hearthstone_model_tiny_16x16.png]]
+** Frame Classification: Results
+
+   #+BEGIN_LaTeX
+     \begin{figure}
+       \centering
+       \begin{minipage}{.45\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/hsp/a.jpg}
+       \end{minipage}
+       \begin{minipage}{.45\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/hsp/c.jpg}
+       \end{minipage}
+       \begin{minipage}{.45\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/hsp/neg_b.jpg}
+       \end{minipage}
+       \begin{minipage}{.45\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/hsp/neg_c.jpg}
+       \end{minipage}
+       \caption{Frames Correctly labeled as \textit{Hearthstone} (row 1) or \textit{Not Hearthstone} (row 2) by Tiny Images + Linear SVM}
+       \label{fig:tiny-positive}
+     \end{figure}
+   #+END_LaTeX
+** Minion Detection
+*** HOG Visualization                                                 :BMCOL:
+    :PROPERTIES:
+    :BEAMER_col: 0.33
+    :END:
+    #+caption: Visualization of HOG Mask
+    [[./figs/minion-detection-hog.png]]
+*** Precision/Recall                                                  :BMCOL:
+    :PROPERTIES:
+    :BEAMER_col: 0.66
+    :END:
+    #+caption: Precision/Recall of dlib's HOG-based Object Detector
+    [[./figs/dlib_prec_rec.png]]
+** Minion Detection: Results
+   #+BEGIN_LaTeX
+     \begin{figure}
+       \centering
+       \begin{minipage}{.19\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/minions/13.jpg}
+       \end{minipage}
+       \begin{minipage}{.19\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/minions/20.jpg}
+       \end{minipage}
+       \begin{minipage}{.19\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/minions/57.jpg}
+       \end{minipage}
+       \begin{minipage}{.19\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/minions/68.jpg}
+       \end{minipage}
+       \begin{minipage}{.19\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/minions/76.jpg}
+       \end{minipage}
+       \begin{minipage}{.19\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/minions/b0.jpg}
+       \end{minipage}
+       \begin{minipage}{.19\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/minions/d5.jpg}
+       \end{minipage}
+       \begin{minipage}{.19\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/minions/ef.jpg}
+       \end{minipage}
+       \begin{minipage}{.19\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/minions/f3.jpg}
+       \end{minipage}
+       \begin{minipage}{.19\textwidth}
+         \centering
+         \includegraphics[width=\linewidth]{./figs/minions/fb.jpg}
+       \end{minipage}
+       \label{fig:minion-sample}
+       \caption{Cutouts from Object Detector}
+     \end{figure}
+   #+END_LaTeX
+
+** Minion Classification
+
+   - Problem: \geq 500 classes and growing
+   - Solution: Clustering in Feature Space
+     + K-Means is not usable because $k$ must be fixed
+     + Algorithms for unknown and unbounded $k$ exist
+       * Affinity Propagation
+       * DBSCAN
+
+** MC Results (SIFT+FLANN, Manual)
+
+   #+BEGIN_LaTeX
+    \begin{figure}[h]
+      \centering
+      \begin{minipage}{.7\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{./figs/clusters_manual/50_small.png}
+      \end{minipage}
+      \begin{minipage}{.45\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{./figs/clusters_manual/3.png}
+      \end{minipage}
+      \begin{minipage}{.45\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{./figs/clusters_manual/1.png}
+      \end{minipage}
+      \caption{Clusters identified by manual threshold with SIFT+FLANN}
+      \label{fig:clusters-manual}
+    \end{figure}
+  #+END_LaTeX
+
+** MC Results (SIFT+FLANN, AffProp)
+
+   #+BEGIN_LaTeX
+    \begin{figure}[h]
+      \centering
+      \begin{minipage}{.9\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{./figs/clusters_sift_ap/16.png}
+      \end{minipage}
+      \begin{minipage}{.45\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{./figs/clusters_sift_ap/100.png}
+      \end{minipage}
+      \begin{minipage}{.45\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{./figs/clusters_sift_ap/103.png}
+      \end{minipage}
+      \caption{Clusters identified by Affinity Propagation with SIFT+FLANN}
+      \label{fig:clusters-siftflann-ap}
+    \end{figure}
+   #+END_LaTeX
+
+** MC Results (SIFT BoVW, AffProp)
+
+   #+BEGIN_LaTeX
+    \begin{figure}[h]
+    \centering
+    \includegraphics[width=\textwidth]{./figs/clusters_bovw_sift/1.png}
+    \caption{A cluster chosen using Affinity Propagation with a Bag of Visual Words build using SIFT descriptors.}
+    \label{fig:cluster-bovw}
+    \end{figure}
+   #+END_LaTeX
+
+* Conclusions
+** Conclusion
+
+   - Understanding video games requires many disparate methods
+   - Understanding video games on some level is feasible now
+
+** Future Work
+
+   - Complete frame descriptor
+   - Work on modeling interaction
+     + Learning to send input
+     + Learning to play the game
