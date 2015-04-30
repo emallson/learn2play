@@ -4,4 +4,6 @@
 ((org-mode
   (org-babel-use-quick-and-dirty-noweb-expansion . t)
   (pyvenv-activate . "./venv/")
-  (org-src-preserve-indentation . t)))
+  (org-src-preserve-indentation . t))
+ (python-mode
+  (pyvenv-activate . "venv")))
